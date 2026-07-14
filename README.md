@@ -520,39 +520,4 @@ performance, plots, LLM/PubMed/PubTator priors, and the R code used for each
 run. It is intended for small examples. Use R scripts or HPC/server jobs for
 large analyses.
 
-## GitHub Pages Website
-
-This repository includes a `pkgdown` configuration and a GitHub Actions
-workflow for GitHub Pages.
-
-After pushing to GitHub:
-
-1. Go to repository **Settings -> Pages**.
-2. Set **Source** to **GitHub Actions**.
-3. Push to the `main` branch.
-4. The workflow will build and deploy the package website.
-
-Expected site URL:
-
-```text
-https://Shrabanti87.github.io/CASPEN/
-```
-
-## Suggested Repository Push
-
-From the GitHub-ready folder:
-
-```bash
-git init
-git add .
-git commit -m "Initial CASPEN package"
-git branch -M main
-git remote add origin https://github.com/Shrabanti87/CASPEN.git
-git push -u origin main
-```
-
-## Citation
-
-Citation details can be added after the manuscript or software citation is
-available.
 
