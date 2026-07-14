@@ -1,0 +1,545 @@
+---
+title: "CASPEN Tutorial: Celltype-Aware Stacked Pathway-Guided Ensemble Prediction"
+author: "Shrabanti Chowdhury, Anna Xing, Pei Wang"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{CASPEN Tutorial: Celltype-Aware Stacked Pathway-Guided Ensemble Prediction}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.align = "center"
+)
+```
+
+CASPEN (celltype aware stacked pathway guided ensemble) is designed for
+pathway-guided prediction when the biological signal is organized by pathways,
+cell types, or both. It supports three outcome families:
+
+- binary outcomes, evaluated with AUC and sensitivity at high specificity
+- survival outcomes, evaluated with time-dependent AUC, C-index, and SP95
+- categorical outcomes, evaluated with multiclass AUC and SP95
+
+The central idea is simple: build models within pathway-celltype feature sets,
+select predictive pathway-celltypes, optionally refine genes within those
+pathways, and then evaluate training or independent test performance.
+
+```{r workflow-figure, echo = FALSE, out.width = "100%"}
+knitr::include_graphics("../man/figures/caspen-workflow.svg")
+```
+
+## Function Map
+
+| Function | Purpose | Typical input | Typical output |
+|---|---|---|---|
+| `pathway_select()` | Select predictive pathways or pathway-celltypes | outcome, omics data, pathway list, models | AUC/C-index/SP95 matrices, selected labels, priors |
+| `gene_select()` | Select genes inside selected pathways | selected pathways, omics data, outcome, native-importance models | selected gene lists and ranking table |
+| `Train_perform_CV()` | Estimate training performance by cross-validation | selected features and models | cross-validated model metrics |
+| `Test_perform()` | Evaluate an independent test set | train/test data, selected features, models | test-set model metrics |
+
+## Load Example Data
+
+The package includes a compact example object. It contains a binary outcome,
+an omics matrix, and a list of pathway gene sets.
+
+```{r load-data}
+library(CASPEN)
+data(caspen_example)
+
+names(caspen_example)
+dim(caspen_example$data_to_pass)
+table(caspen_example$outcome)
+length(caspen_example$pathways)
+```
+
+For a quick tutorial, we use a small subset.
+
+```{r subset-data}
+set.seed(1)
+x <- caspen_example$data_to_pass
+y <- caspen_example$outcome
+pathways <- caspen_example$pathways[1:3]
+```
+
+## Model Backends And Versions
+
+CASPEN uses short model abbreviations in all three outcome families. To record
+the modeling packages and installed versions used in an analysis, run:
+
+```{r model-info}
+caspen_model_info()
+```
+
+Common abbreviations are `XG` for xgboost, `RF` for random forest, `EN` for
+elastic net, `GB` for gradient boosting, `KNN` for k-nearest neighbors, `SVM`
+for support vector machines, `NB` for naive Bayes, `DCT` for decision trees,
+`NN` for neural networks, `ADB` for AdaBoost, and `MB` for model-based
+boosting.
+
+## Step 1: Select Pathways
+
+`pathway_select()` trains models for each pathway and returns performance
+matrices. For binary outcomes, the primary metric is AUC. For survival outcomes,
+the primary metric is C-index when available. SP95 is sensitivity at 95%
+specificity.
+
+```{r pathway-select-example, eval = FALSE}
+path_res <- pathway_select(
+  outcome.type = "binary",
+  outcome = y,
+  data = x,
+  features = pathways,
+  models.indiv = c("RF", "EN", "DCT"),
+  iter = 5,
+  num.folds = 3,
+  ensemble = TRUE,
+  models.ens = c("RF", "EN"),
+  num.sel.path = 2,
+  fs.AUC.cut = 0.60,
+  fs.sp.cut = 0.05
+)
+
+path_res$auc
+path_res$SP.95
+path_res$selection.table
+path_res$features
+```
+
+To parallelize repeated iterations within each pathway, turn on the future
+backend. By default, CASPEN uses `future::availableCores()` and caps the worker
+count at `iter`, so users do not need to hard-code a worker number.
+
+```{r pathway-select-parallel-example, eval = FALSE}
+path_res <- pathway_select(
+  outcome.type = "binary",
+  outcome = y,
+  data = x,
+  features = pathways,
+  models.indiv = c("RF", "EN", "DCT"),
+  iter = 100,
+  num.folds = 3,
+  parallel.iter = TRUE
+)
+```
+
+### Adding Literature or LLM Priors
+
+CASPEN can use user-supplied literature signatures:
+
+- additional literature-derived gene sets through `literature.features`
+- pathway prior weights through `pathway.prior`
+
+These priors can be pathway-specific or pathway-celltype-specific.
+
+```{r prior-example, eval = FALSE}
+literature_sets <- list(
+  Literature_Immune_Response = c("STAT1", "IRF1", "CXCL10", "B2M")
+)
+
+pathway_prior <- c(
+  "akt" = 0.60,
+  "anti_apoptosis" = 0.50,
+  "Literature_Immune_Response" = 0.95
+)
+
+path_res <- pathway_select(
+  outcome.type = "binary",
+  outcome = y,
+  data = x,
+  features = pathways,
+  literature.features = literature_sets,
+  pathway.prior = pathway_prior,
+  models.indiv = c("RF", "EN"),
+  iter = 3,
+  num.folds = 3
+)
+
+path_res$data.metric
+path_res$SP.95
+path_res$Prior.weight
+```
+
+If user-supplied signatures are not available, CASPEN can query an LLM for
+disease/outcome-specific signatures and prior weights. By default this uses the
+OpenAI API through `OPENAI_API_KEY` and can retrieve PubMed abstracts as
+grounding context.
+
+CASPEN supports three literature-prior routes:
+
+1. Use `prior.method = "pubmed_count"` in `llm_literature_signatures()` or
+   `llm.prior.method = "pubmed_count"` in `pathway_select()` to avoid an LLM
+   call and score pathways by normalized PubMed hit counts. Use
+   `prior.method = "pubtator"` or `llm.prior.method = "pubtator"` to score
+   PubTator3 gene-annotation evidence.
+2. Use the OpenAI API by setting `OPENAI_API_KEY` or passing `llm.api.key`.
+3. Use a local/custom LLM by passing `llm.provider = "custom"` and an `llm.fn`
+   function. Ollama is a convenient local option.
+
+OpenAI setup:
+
+```{r openai-setup-example, eval = FALSE}
+Sys.setenv(OPENAI_API_KEY = "sk-proj-your_real_key_here")
+
+llm_res <- llm_literature_signatures(
+  disease = "high-grade serous ovarian cancer",
+  outcome.context = "platinum resistance",
+  features = pathways,
+  mode = "prior",
+  model = "gpt-4o-mini",
+  pubmed = FALSE,
+  temperature = NULL
+)
+```
+
+PubMed-count prior without an LLM:
+
+```{r pubmed-count-example, eval = FALSE}
+pubmed_res <- llm_literature_signatures(
+  disease = "high-grade serous ovarian cancer",
+  outcome.context = "platinum resistance",
+  features = pathways,
+  mode = "prior",
+  prior.method = "pubmed_count",
+  email = "your.email@example.com"
+)
+
+pubmed_res$evidence[, c("pathway", "pubmed.count", "pubmed.score", "prior")]
+```
+
+PubTator3 prior without an LLM:
+
+```{r pubtator-example, eval = FALSE}
+pubtator_res <- llm_literature_signatures(
+  disease = "high-grade serous ovarian cancer",
+  outcome.context = "platinum resistance",
+  features = pathways,
+  mode = "prior",
+  prior.method = "pubtator",
+  pubmed.max = 20,
+  email = "your.email@example.com"
+)
+
+pubtator_res$evidence[, c("pathway", "pubtator.count",
+                          "pubtator.score", "prior")]
+```
+
+Hybrid PubMed + PubTator + LLM prior:
+
+```{r hybrid-evidence-example, eval = FALSE}
+hybrid_res <- llm_literature_signatures(
+  disease = "high-grade serous ovarian cancer",
+  outcome.context = "platinum resistance",
+  features = pathways,
+  mode = "prior",
+  prior.method = "hybrid",
+  hybrid.weights = c(pubmed_count = 0.25, pubtator = 0.25, llm = 0.5),
+  model = "gpt-4o-mini",
+  pubmed = FALSE,
+  temperature = NULL
+)
+```
+
+Local Ollama setup:
+
+1. Install Ollama from <https://ollama.com/download>.
+2. In Terminal, run `ollama pull qwen2.5:7b`.
+3. Keep the Ollama app or service running while R calls
+   `http://localhost:11434`.
+
+```{r ollama-example, eval = FALSE}
+ollama_llm <- function(prompt) {
+  req <- httr2::request("http://localhost:11434/api/generate") |>
+    httr2::req_body_json(list(
+      model = "qwen2.5:7b",
+      prompt = prompt,
+      stream = FALSE
+    ))
+  res <- httr2::req_perform(req)
+  out <- jsonlite::fromJSON(httr2::resp_body_string(res))
+  out$response
+}
+
+ollama_res <- llm_literature_signatures(
+  disease = "high-grade serous ovarian cancer",
+  outcome.context = "platinum resistance",
+  features = pathways,
+  mode = "prior",
+  provider = "custom",
+  llm.fn = ollama_llm,
+  pubmed = FALSE
+)
+```
+
+```{r llm-example, eval = FALSE}
+path_res <- pathway_select(
+  outcome.type = "binary",
+  outcome = y,
+  data = x,
+  features = pathways,
+  models.indiv = c("RF", "EN", "DCT"),
+  iter = 50,
+  num.folds = 3,
+  llm.mode = "both",
+  disease = "high-grade serous ovarian cancer",
+  outcome.context = "platinum resistance"
+)
+
+path_res$data.metric
+path_res$SP.95
+path_res$Prior.weight
+path_res$llm$evidence
+```
+
+`llm.mode = "curate"` adds new literature signatures without prior scoring,
+`llm.mode = "prior"` scores existing user pathways without adding new
+signatures, and `llm.mode = "both"` does both. CASPEN keeps the model metric,
+SP95, and prior weight as separate outputs so users can choose cutoffs directly.
+
+The LLM output can also be generated and inspected before model fitting:
+
+```{r llm-helper-example, eval = FALSE}
+llm_res <- llm_literature_signatures(
+  disease = "high-grade serous ovarian cancer",
+  outcome.context = "platinum resistance",
+  features = pathways,
+  mode = "both"
+)
+
+llm_res$literature.features
+llm_res$pathway.prior
+llm_res$evidence
+```
+
+## Step 2: Celltype-Aware Pathway Mapping
+
+If the columns of the omics matrix encode both gene and cell type, CASPEN can
+expand bulk pathways into pathway-celltype features.
+
+Supported column styles include:
+
+- `GENE_Celltype`
+- `Celltype_GENE`
+- `GENE.Celltype`
+- custom separators through `celltype.sep`
+
+If the pathway name already contains a cell type or alias, it is mapped only to
+that cell type. Otherwise, it is expanded to all supplied cell types.
+
+```{r celltype-example, eval = FALSE}
+celltypes <- c("CAF", "CD4_Tcells", "CD8_Tcells", "Macrophages")
+
+celltype_aliases <- list(
+  CD4_Tcells = c("immune", "T cells", "CD4"),
+  CD8_Tcells = c("immune", "T cells", "CD8"),
+  Macrophages = c("immune", "macrophage")
+)
+
+pathways_ct <- list(
+  hypoxia = c("ARNT", "BCL2", "CDKN1A"),
+  niche_immune = c("STAT1", "B2M", "IRF1")
+)
+
+path_res <- pathway_select(
+  outcome.type = "binary",
+  outcome = y,
+  data = celltype_expression,
+  features = pathways_ct,
+  celltypes = celltypes,
+  celltype.aliases = celltype_aliases,
+  models.indiv = c("RF", "EN"),
+  iter = 5,
+  num.folds = 3
+)
+```
+
+In this example, `hypoxia` is expanded to every cell type, while
+`niche_immune` maps only to `CD4_Tcells`, `CD8_Tcells`, and `Macrophages`
+because those cell types have `"immune"` as an alias.
+
+## Step 3: Select Genes Within Selected Pathways
+
+`gene_select()` is a separate optional step. It uses native model importance
+from models such as `XG`, `RF`, `GB`, `EN`, `MB`, and `DCT`.
+
+Because raw importance has different meanings in different models, CASPEN does
+not average raw values. Instead it:
+
+1. converts native importance to within-run percentiles,
+2. computes the median percentile for each gene,
+3. computes stability as the proportion of runs where the gene reaches the
+   chosen percentile threshold,
+4. filters genes by the user-specified stability cutoff,
+5. returns the top genes ordered by median percentile.
+
+The user controls the cutoffs:
+
+- `min.pathway.size`: only pathways larger than this are reduced
+- `gene.stability.quantile`: percentile threshold for stability, default 0.75
+- `gene.min.stability`: minimum stability required, default 0.25
+- `max.genes`: maximum number of genes to keep after filtering
+
+```{r gene-select-example, eval = FALSE}
+gene_res <- gene_select(
+  outcome.type = "binary",
+  outcome = y,
+  data = x,
+  features = path_res$features,
+  models = c("RF", "EN", "DCT"),
+  iter = 10,
+  num.folds = 3,
+  min.pathway.size = 30,
+  gene.stability.quantile = 0.75,
+  gene.min.stability = 0.25,
+  max.genes = 30
+)
+
+gene_res$selected.features
+head(gene_res$ranking)
+```
+
+If no gene in a pathway passes `gene.min.stability`, the selected gene list for
+that pathway is empty. This makes the cutoff behavior explicit and user-driven.
+
+## Step 4: Training Performance
+
+After selecting pathway-celltypes or genes, use `Train_perform_CV()` to estimate
+cross-validated training performance.
+
+```{r train-performance-example, eval = FALSE}
+train_res <- Train_perform_CV(
+  outcome.type = "binary",
+  outcome = y,
+  train_data = x,
+  features = gene_res$selected.features,
+  models.indiv = c("RF", "EN", "DCT"),
+  iter = 10,
+  ensemble = TRUE,
+  models.ens = c("RF", "EN")
+)
+
+train_res
+```
+
+## Step 5: Independent Test Performance
+
+For an external validation cohort, use `Test_perform()`. The same selected
+features should be supplied for training and testing.
+
+```{r test-performance-example, eval = FALSE}
+test_res <- Test_perform(
+  outcome.type = "binary",
+  outcome = y_train,
+  train_data = x_train,
+  test_data = x_test,
+  test_outcome = y_test,
+  features = gene_res$selected.features,
+  models.indiv = c("RF", "EN", "DCT"),
+  ensemble = TRUE,
+  models.ens = c("RF", "EN")
+)
+
+test_res
+```
+
+## Survival Outcomes
+
+For survival prediction, provide both event status and survival time.
+`pathway_select()` uses C-index as the primary pathway-selection metric when
+available, while time-dependent AUC and SP95 are also returned.
+
+```{r survival-example, eval = FALSE}
+surv_res <- pathway_select(
+  outcome.type = "survival",
+  outcome = status,
+  survdays = days,
+  time_point = 365,
+  data = x,
+  features = pathways,
+  models.indiv = c("RF", "EN", "GB"),
+  iter = 5,
+  num.folds = 3,
+  fs.AUC.cut = 0.60,
+  fs.sp.cut = 0.05
+)
+
+surv_res$C.index
+surv_res$auc
+surv_res$SP.95
+```
+
+## Categorical Outcomes
+
+For categorical outcomes, CASPEN supports multiclass prediction using models
+such as random forest, elastic net, gradient boosting, model-based boosting, and
+one-vs-rest learners where needed.
+
+```{r categorical-example, eval = FALSE}
+cat_res <- pathway_select(
+  outcome.type = "categorical",
+  outcome = subtype,
+  data = x,
+  features = pathways,
+  models.indiv = c("RF", "EN", "MB", "DCT"),
+  iter = 5,
+  num.folds = 3
+)
+
+cat_res$auc
+cat_res$SP.95
+```
+
+## Practical Recommendations
+
+- Start with pathway-level selection before gene-level selection.
+- Use celltype aliases to make broad terms such as `"immune"` explicit.
+- Use literature or LLM priors as external inputs, not as hidden training-time
+  dependencies.
+- For large pathways, run `gene_select()` only after pathway filtering.
+- Keep the gene-selection cutoff user-driven: stability determines eligibility,
+  and median percentile determines ranking.
+- For final reporting, inspect both `selected.features` and the full `ranking`
+  table.
+
+## Minimal End-to-End Skeleton
+
+```{r skeleton, eval = FALSE}
+path_res <- pathway_select(
+  outcome.type = "binary",
+  outcome = y,
+  data = x,
+  features = pathways,
+  models.indiv = c("RF", "EN", "DCT"),
+  iter = 10,
+  num.folds = 3,
+  num.sel.path = 10
+)
+
+gene_res <- gene_select(
+  outcome.type = "binary",
+  outcome = y,
+  data = x,
+  features = path_res$features,
+  models = c("RF", "EN", "DCT"),
+  iter = 10,
+  num.folds = 3,
+  min.pathway.size = 30,
+  gene.stability.quantile = 0.75,
+  gene.min.stability = 0.25,
+  max.genes = 30
+)
+
+train_res <- Train_perform_CV(
+  outcome.type = "binary",
+  outcome = y,
+  train_data = x,
+  features = gene_res$selected.features,
+  models.indiv = c("RF", "EN", "DCT"),
+  iter = 10,
+  ensemble = TRUE,
+  models.ens = c("RF", "EN")
+)
+```

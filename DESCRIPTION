@@ -1,0 +1,67 @@
+Package: CASPEN
+Title: CASPEN: Celltype-Aware Stacked Pathway-Guided Ensemble Prediction
+Version: 0.0.1
+Authors@R:
+    c(
+      person("Shrabanti", "Chowdhury",
+        email = "shrabanti.chowdhury@mssm.edu",
+        role = "aut"
+      ),
+      person("Anna", "Xing",
+        email = "anna.xing@mssm.edu",
+        role = c("aut", "cre"),
+        comment = c(ORCID = "0009-0008-3487-4888")
+      ),
+      person("Pei", "Wang",
+        email = "pei.wang@mssm.edu",
+        role = "aut"
+      )
+    )
+Description: CASPEN (celltype aware stacked pathway guided ensemble) is a
+    toolkit for training and evaluating celltype-aware pathway-guided ensemble
+    models, with functionality for pathway selection, gene selection, model
+    comparison, and survival analysis. Users can specify input data, pathway
+    definitions, celltype aliases, and modeling frameworks to build
+    reproducible predictive workflows for binary, categorical, and survival
+    outcomes.
+URL: https://Shrabanti87.github.io/CASPEN/, https://github.com/Shrabanti87/CASPEN
+BugReports: https://github.com/Shrabanti87/CASPEN/issues
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+VignetteBuilder: knitr
+Depends:
+    R (>= 4.1)
+Imports:
+    caret,
+    e1071,
+    future,
+    future.apply,
+    gbm,
+    httr2,
+    glmnet,
+    jsonlite,
+    JOUSBoost,
+    mboost,
+    neuralnet,
+    naivebayes,
+    nnet,
+    pROC,
+    randomForest,
+    randomForestSRC,
+    rpart,
+    stats,
+    survival,
+    survivalROC,
+    survivalsvm,
+    survXgboost,
+    utils,
+    xgboost
+Suggests:
+    DT,
+    knitr,
+    pkgdown,
+    rmarkdown,
+    shiny,
+    testthat (>= 3.0.0)

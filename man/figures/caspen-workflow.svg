@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="520" viewBox="0 0 1120 520" role="img" aria-labelledby="title desc">
+  <title id="title">CASPEN workflow</title>
+  <desc id="desc">Workflow from input omics data and pathway definitions to celltype-aware pathway selection, optional gene selection, model training, and test performance.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#334155"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .band { fill: #eef6f5; }
+      .box { fill: #ffffff; stroke: #334155; stroke-width: 2; rx: 10; }
+      .box2 { fill: #fff7ed; stroke: #9a3412; stroke-width: 2; rx: 10; }
+      .box3 { fill: #eff6ff; stroke: #1d4ed8; stroke-width: 2; rx: 10; }
+      .box4 { fill: #f7fee7; stroke: #4d7c0f; stroke-width: 2; rx: 10; }
+      .title { font: 700 22px Arial, sans-serif; fill: #0f172a; }
+      .text { font: 15px Arial, sans-serif; fill: #1e293b; }
+      .small { font: 13px Arial, sans-serif; fill: #475569; }
+      .arrow { stroke: #334155; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #64748b; stroke-width: 2; stroke-dasharray: 6 5; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect class="bg" x="0" y="0" width="1120" height="520"/>
+  <rect class="band" x="24" y="24" width="1072" height="472" rx="18"/>
+  <text class="title" x="50" y="62">CASPEN Celltype-Aware Stacked Pathway Ensemble Workflow</text>
+
+  <rect class="box" x="50" y="105" width="200" height="120"/>
+  <text class="text" x="72" y="138">Input data</text>
+  <text class="small" x="72" y="166">• Omics matrix</text>
+  <text class="small" x="72" y="188">• Outcome labels</text>
+  <text class="small" x="72" y="210">• Survival time if needed</text>
+
+  <rect class="box" x="50" y="285" width="200" height="120"/>
+  <text class="text" x="72" y="318">Pathway definitions</text>
+  <text class="small" x="72" y="346">• User gene sets</text>
+  <text class="small" x="72" y="368">• Literature/LLM gene sets</text>
+  <text class="small" x="72" y="390">• Optional prior weights</text>
+
+  <rect class="box3" x="310" y="180" width="220" height="150"/>
+  <text class="text" x="332" y="214">Celltype mapping</text>
+  <text class="small" x="332" y="244">Bulk pathways expand to</text>
+  <text class="small" x="332" y="266">pathway-celltype features</text>
+  <text class="small" x="332" y="292">Aliases control terms like</text>
+  <text class="small" x="332" y="314">“immune” or “T cells”</text>
+
+  <rect class="box2" x="590" y="105" width="220" height="140"/>
+  <text class="text" x="612" y="138">pathway_select()</text>
+  <text class="small" x="612" y="166">Runs pathway-celltype</text>
+  <text class="small" x="612" y="188">models and selects by</text>
+  <text class="small" x="612" y="210">AUC / C-index / SP95</text>
+  <text class="small" x="612" y="232">plus optional prior</text>
+
+  <rect class="box4" x="590" y="305" width="220" height="130"/>
+  <text class="text" x="612" y="338">gene_select()</text>
+  <text class="small" x="612" y="366">Native model importance</text>
+  <text class="small" x="612" y="388">percentiles + stability</text>
+  <text class="small" x="612" y="410">within selected pathways</text>
+
+  <rect class="box" x="870" y="105" width="200" height="130"/>
+  <text class="text" x="892" y="138">Train_perform_CV()</text>
+  <text class="small" x="892" y="166">Cross-validated training</text>
+  <text class="small" x="892" y="188">performance for base</text>
+  <text class="small" x="892" y="210">and ensemble models</text>
+
+  <rect class="box" x="870" y="305" width="200" height="130"/>
+  <text class="text" x="892" y="338">Test_perform()</text>
+  <text class="small" x="892" y="366">Independent test-set</text>
+  <text class="small" x="892" y="388">AUC / C-index / SP95</text>
+  <text class="small" x="892" y="410">with confidence intervals</text>
+
+  <path class="arrow" d="M250 165 C278 165 282 230 310 230"/>
+  <path class="arrow" d="M250 345 C282 345 282 280 310 280"/>
+  <path class="arrow" d="M530 240 C560 220 560 180 590 175"/>
+  <path class="dash" d="M700 245 L700 305"/>
+  <path class="arrow" d="M810 175 L870 175"/>
+  <path class="dash" d="M810 195 C842 230 842 330 870 355"/>
+  <path class="arrow" d="M810 370 L870 370"/>
+  <path class="arrow" d="M810 350 C842 305 842 210 870 190"/>
+  <text class="small" x="724" y="278">optional gene refinement</text>
+  <text class="small" x="823" y="154">pathway-level features</text>
+  <text class="small" x="824" y="290">gene-refined features</text>
+</svg>

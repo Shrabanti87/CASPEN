@@ -1,0 +1,73 @@
+url: https://Shrabanti87.github.io/CASPEN/
+
+template:
+  bootstrap: 5
+  bootswatch: flatly
+  bslib:
+    primary: "#1f6f4a"
+
+home:
+  title: CASPEN
+  description: Celltype-aware stacked pathway-guided ensemble prediction for binary, survival, and categorical outcomes.
+  sidebar:
+    structure: [links, license, citation, authors, dev]
+
+navbar:
+  structure:
+    left: [home, intro, demo, reference, articles]
+    right: [github]
+  components:
+    home:
+      text: Home
+      href: index.html
+    intro:
+      text: Tutorial
+      href: articles/caspen-tutorial.html
+    demo:
+      text: Demo
+      href: articles/caspen-portal.html
+    reference:
+      text: Reference
+      href: reference/index.html
+    articles:
+      text: Articles
+      menu:
+      - text: Portal and Shiny demo
+        href: articles/caspen-portal.html
+      - text: CASPEN tutorial
+        href: articles/caspen-tutorial.html
+    github:
+      icon: fa-github
+      href: https://github.com/Shrabanti87/CASPEN
+      aria-label: GitHub
+
+reference:
+- title: Package and demo
+  contents:
+  - CASPEN-package
+  - caspen_model_info
+  - launch_caspen_demo
+- title: Pathway and gene selection
+  contents:
+  - pathway_select
+  - gene_select
+  - llm_literature_signatures
+- title: Performance evaluation
+  contents:
+  - Train_perform_CV
+  - Test_perform
+- title: Plotting
+  contents:
+  - plot_pathway_selection
+  - plot_gene_selection
+  - plot_roc_curve
+- title: Example data
+  contents:
+  - caspen_example
+
+articles:
+- title: Tutorials
+  navbar: ~
+  contents:
+  - caspen-portal
+  - caspen-tutorial
