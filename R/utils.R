@@ -385,6 +385,7 @@ expand_celltype_pathways <- function(features, data.cols, celltypes = NULL,
   }
 
   out <- list()
+  map <- list()
   for (nm in names(features)) {
     genes <- extract_pathway_genes(features[[nm]])
     matched_ct <- pathway_celltype_matches(nm, celltypes, celltype.aliases)
@@ -400,13 +401,106 @@ expand_celltype_pathways <- function(features, data.cols, celltypes = NULL,
         paste0(nm, "_", ct)
       }
       out[[out_name]] <- cols
+      map[[out_name]] <- data.frame(
+        label = out_name,
+        pathway = nm,
+        celltype = ct,
+        pathway.matched.celltype = length(matched_ct) > 0,
+        stringsAsFactors = FALSE
+      )
     }
   }
 
   if (!length(out)) {
     stop("No pathway genes could be mapped to celltype-specific expression columns.")
   }
+  attr(out, "celltype.map") <- do.call(rbind, map)
   out
+}
+
+#' @keywords internal
+#' @noRd
+celltype_specificity_values <- function(performance, chance = 0.5,
+                                        lower.is.better = FALSE) {
+  performance <- as.numeric(performance)
+  performance <- performance[is.finite(performance)]
+  if (!length(performance)) {
+    return(c(specificity = NA_real_, entropy = NA_real_,
+             entropy.normalized = NA_real_))
+  }
+  if (isTRUE(lower.is.better)) {
+    signal <- max(performance, na.rm = TRUE) - performance
+  } else {
+    signal <- performance - chance
+  }
+  signal <- pmax(signal, 0)
+  signal <- signal[is.finite(signal) & signal > 0]
+  if (!length(signal)) {
+    return(c(specificity = NA_real_, entropy = NA_real_,
+             entropy.normalized = NA_real_))
+  }
+  if (length(signal) == 1L || sum(signal) <= 0) {
+    return(c(specificity = 1, entropy = 0, entropy.normalized = 0))
+  }
+  p <- signal / sum(signal)
+  entropy <- -sum(p * log(p))
+  entropy.norm <- entropy / log(length(p))
+  c(specificity = 1 - entropy.norm,
+    entropy = entropy,
+    entropy.normalized = entropy.norm)
+}
+
+#' @keywords internal
+#' @noRd
+celltype_specificity_summary <- function(metric.mat, labels, celltype.map = NULL,
+                                         chance = 0.5,
+                                         lower.is.better = FALSE) {
+  if (is.null(metric.mat) || !length(labels)) {
+    return(list(summary = NULL, by.model = NULL))
+  }
+  metric.mat <- as.matrix(metric.mat)
+  metric.mat <- metric.mat[labels, , drop = FALSE]
+  if (is.null(celltype.map) || !nrow(celltype.map)) {
+    celltype.map <- data.frame(
+      label = labels,
+      pathway = labels,
+      celltype = NA_character_,
+      stringsAsFactors = FALSE
+    )
+  }
+  celltype.map <- celltype.map[match(labels, celltype.map$label), , drop = FALSE]
+  celltype.map$label <- labels
+  grouped <- split(seq_along(labels), celltype.map$pathway)
+  summary.rows <- lapply(names(grouped), function(pathway) {
+    idx <- grouped[[pathway]]
+    per.row <- rowMeans(metric.mat[idx, , drop = FALSE], na.rm = TRUE)
+    stats <- celltype_specificity_values(per.row, chance, lower.is.better)
+    dominant <- idx[which.max(replace(per.row, !is.finite(per.row), -Inf))]
+    data.frame(
+      pathway = pathway,
+      n.celltypes = length(idx),
+      specificity = unname(stats[["specificity"]]),
+      entropy = unname(stats[["entropy"]]),
+      entropy.normalized = unname(stats[["entropy.normalized"]]),
+      dominant.celltype = celltype.map$celltype[dominant],
+      dominant.label = celltype.map$label[dominant],
+      dominant.metric = per.row[which.max(replace(per.row, !is.finite(per.row), -Inf))],
+      stringsAsFactors = FALSE
+    )
+  })
+  by.model <- do.call(rbind, lapply(names(grouped), function(pathway) {
+    idx <- grouped[[pathway]]
+    vals <- vapply(seq_len(ncol(metric.mat)), function(j) {
+      celltype_specificity_values(metric.mat[idx, j], chance,
+                                  lower.is.better)[["specificity"]]
+    }, numeric(1))
+    names(vals) <- colnames(metric.mat)
+    vals
+  }))
+  rownames(by.model) <- names(grouped)
+  summary <- do.call(rbind, summary.rows)
+  rownames(summary) <- NULL
+  list(summary = summary, by.model = by.model)
 }
 
 #' @keywords internal
@@ -662,6 +756,239 @@ run_train_performance_iterations <- function(perf.fun, iter,
 
 #' @keywords internal
 #' @noRd
+caspen_tune_space <- function(model, outcome.type, n, p) {
+  model <- toupper(model)
+  small_nrounds <- if (n < 100) c(50, 100, 150) else c(75, 150, 250)
+  mtry_vals <- unique(pmax(1, round(c(sqrt(p), p / 3, p / 2))))
+  space <- switch(
+    model,
+    XG = list(
+      max_depth = c(1, 2, 3, 4),
+      eta = c(0.01, 0.03, 0.05, 0.1),
+      nrounds = small_nrounds,
+      lambda = c(0, 0.5, 1),
+      alpha = c(0, 0.5, 1)
+    ),
+    RF = list(
+      ntree = c(200, 500),
+      mtry = mtry_vals
+    ),
+    EN = list(
+      alpha = c(0.05, 0.2, 0.5, 0.8, 1),
+      s = c("lambda.1se", "lambda.min")
+    ),
+    GB = list(
+      n.trees = small_nrounds,
+      interaction.depth = c(1, 2, 3),
+      shrinkage = c(0.01, 0.03, 0.05, 0.1),
+      n.minobsinnode = c(2, 5, 10)
+    ),
+    ADB = list(
+      tree_depth = c(1, 2, 3),
+      n_rounds = small_nrounds
+    ),
+    MB = list(
+      mstop = c(50, 100, 200, 300)
+    ),
+    KNN = list(
+      k = unique(pmax(1, seq(3, min(25, max(3, n - 1)), by = 2)))
+    ),
+    SVM = list(
+      cost = c(0.1, 1, 5, 10),
+      gamma = c(1 / max(1, p), 0.01, 0.05, 0.1)
+    ),
+    NN = list(
+      hidden = I(list(c(4), c(8), c(8, 4), c(12, 6))),
+      rep = c(1)
+    ),
+    DCT = list(
+      cp = c(0.001, 0.005, 0.01, 0.03),
+      maxdepth = c(2, 3, 5, 8)
+    ),
+    NB = list(
+      usekernel = c(TRUE, FALSE)
+    ),
+    list()
+  )
+  if (outcome.type == "continuous" && model == "NB") return(list())
+  space
+}
+
+#' @keywords internal
+#' @noRd
+caspen_candidate_grid <- function(space, tune.method = "random", tune.n = 5,
+                                  seed = NULL) {
+  if (!length(space)) return(list(list()))
+  tune.method <- match.arg(tune.method,
+                           c("random", "grid", "successive_halving",
+                             "hyperband", "bayes"))
+  if (!is.null(seed)) set.seed(seed)
+  if (tune.method %in% c("successive_halving", "hyperband", "bayes")) {
+    message("CASPEN currently uses fast random search for tune.method = '",
+            tune.method, "'.")
+    tune.method <- "random"
+  }
+  values <- lapply(space, function(v) {
+    if (inherits(v, "AsIs")) return(as.list(v))
+    if (is.list(v)) return(v)
+    as.list(v)
+  })
+  tune.n <- max(1L, as.integer(tune.n %||% 5L))
+  if (tune.method == "random") {
+    return(lapply(seq_len(tune.n), function(i) {
+      lapply(values, function(v) v[[sample.int(length(v), 1)]])
+    }))
+  }
+  idx.grid <- expand.grid(lapply(values, seq_along),
+                          KEEP.OUT.ATTRS = FALSE,
+                          stringsAsFactors = FALSE)
+  tune.n <- min(tune.n, nrow(idx.grid))
+  lapply(seq_len(tune.n), function(i) {
+    row <- idx.grid[i, , drop = FALSE]
+    out <- lapply(names(values), function(nm) values[[nm]][[row[[nm]]]])
+    names(out) <- names(values)
+    out
+  })
+}
+
+#' @keywords internal
+#' @noRd
+caspen_metric_score <- function(outcome.type, outcome, pred, survdays = NULL,
+                                continuous.metric = "r2") {
+  outcome.type <- tolower(outcome.type)
+  pred <- as.numeric(pred)
+  if (outcome.type == "binary") {
+    roc.obj <- tryCatch(
+      pROC::roc(outcome, pred, levels = c(0, 1), direction = "<", quiet = TRUE),
+      error = function(e) NULL
+    )
+    return(if (is.null(roc.obj)) NA_real_ else fix_auc(as.numeric(roc.obj$auc)))
+  }
+  if (outcome.type == "survival") {
+    return(survival_cindex(survdays, outcome, pred)[["cindex"]])
+  }
+  if (outcome.type == "continuous") {
+    vals <- continuous_metric_values(outcome, pred)
+    val <- vals[[continuous.metric]]
+    if (continuous.metric %in% c("mae", "rmse")) val <- -val
+    return(val)
+  }
+  cls <- levels(as.factor(outcome))
+  if (length(cls) < 2) return(NA_real_)
+  if (!is.matrix(pred)) return(NA_real_)
+  roc.obj <- tryCatch(pROC::multiclass.roc(outcome, pred), error = function(e) NULL)
+  if (is.null(roc.obj)) NA_real_ else fix_auc(as.numeric(roc.obj$auc))
+}
+
+#' @keywords internal
+#' @noRd
+caspen_tune_model <- function(outcome.type, outcome, x, model, base.params = list(),
+                              tune.method = "random", tune.n = 5,
+                              tune.folds = 3, tune.iter = 1,
+                              survdays = NULL, time_point = NULL,
+                              continuous.metric = "r2", seed = 1) {
+  model <- toupper(model)
+  x <- as.data.frame(x, check.names = FALSE)
+  space <- caspen_tune_space(model, tolower(outcome.type), nrow(x), ncol(x))
+  candidates <- c(list(list()), caspen_candidate_grid(space, tune.method, tune.n, seed))
+  if (!length(candidates)) candidates <- list(list())
+  rows <- vector("list", length(candidates))
+  scores <- rep(NA_real_, length(candidates))
+  for (i in seq_along(candidates)) {
+    cand <- utils::modifyList(base.params %||% list(), candidates[[i]] %||% list())
+    score <- tryCatch({
+      if (tolower(outcome.type) == "binary") {
+        res <- binary_model(outcome, x, model, iter = tune.iter,
+                            num.folds = tune.folds, ensemble = FALSE,
+                            param.indiv = stats::setNames(list(cand), model))
+        caspen_metric_score("binary", rep(outcome, tune.iter),
+                            res$individual[[model]])
+      } else if (tolower(outcome.type) == "survival") {
+        res <- survival_model(outcome, survdays, x, model, iter = tune.iter,
+                              num.folds = tune.folds, ensemble = FALSE,
+                              time_point = time_point,
+                              param.indiv = stats::setNames(list(cand), model))
+        caspen_metric_score("survival", rep(outcome, tune.iter),
+                            res$individual[[model]], rep(survdays, tune.iter))
+      } else if (tolower(outcome.type) == "continuous") {
+        res <- continuous_model(outcome, x, model, iter = tune.iter,
+                                num.folds = tune.folds, ensemble = FALSE,
+                                param.indiv = stats::setNames(list(cand), model))
+        caspen_metric_score("continuous", rep(outcome, tune.iter),
+                            res$individual[[model]],
+                            continuous.metric = continuous.metric)
+      } else {
+        res <- categorical_model(outcome, x, model, iter = tune.iter,
+                                 num.folds = tune.folds, ensemble = FALSE,
+                                 param.indiv = stats::setNames(list(cand), model))
+        pred <- res$individual[[model]]
+        caspen_metric_score("categorical", rep(outcome, tune.iter), pred)
+      }
+    }, error = function(e) NA_real_)
+    scores[i] <- score
+    rows[[i]] <- data.frame(
+      model = model,
+      candidate = i - 1L,
+      candidate.type = if (i == 1L) "default" else "tuned",
+      score = score,
+      params = if (length(cand)) jsonlite::toJSON(cand, auto_unbox = TRUE) else "{}",
+      stringsAsFactors = FALSE
+    )
+  }
+  best <- which.max(replace(scores, !is.finite(scores), -Inf))
+  if (!length(best) || !is.finite(scores[best])) best <- 1L
+  list(params = utils::modifyList(base.params %||% list(), candidates[[best]]),
+       selected.candidate = best - 1L,
+       selected.type = if (best == 1L) "default" else "tuned",
+       table = do.call(rbind, rows))
+}
+
+#' @keywords internal
+#' @noRd
+caspen_auto_tune_params <- function(outcome.type, outcome, x, models,
+                                    param.indiv = NULL,
+                                    tune.method = "random", tune.n = 5,
+                                    tune.folds = 3, tune.iter = 1,
+                                    tune.models = NULL,
+                                    survdays = NULL, time_point = NULL,
+                                    continuous.metric = "r2",
+                                    seed = 1) {
+  param.indiv <- param.indiv %||% list()
+  models <- unique(toupper(models))
+  tune.models <- unique(toupper(tune.models %||% models))
+  tune.models <- intersect(models, tune.models)
+  tuned <- param.indiv
+  tabs <- list()
+  for (model in tune.models) {
+    message("Auto-tuning ", model, " with ", tune.n,
+            " candidate setting(s).")
+    fit <- caspen_tune_model(
+      outcome.type = outcome.type,
+      outcome = outcome,
+      x = x,
+      model = model,
+      base.params = param.indiv[[model]] %||% list(),
+      tune.method = tune.method,
+      tune.n = tune.n,
+      tune.folds = tune.folds,
+      tune.iter = tune.iter,
+      survdays = survdays,
+      time_point = time_point,
+      continuous.metric = continuous.metric,
+      seed = seed
+    )
+    tuned[[model]] <- fit$params
+    tabs[[model]] <- fit$table
+    tabs[[model]]$selected <- tabs[[model]]$candidate == fit$selected.candidate
+    tabs[[model]]$selected.type <- ifelse(tabs[[model]]$selected,
+                                          fit$selected.type, NA_character_)
+  }
+  list(param.indiv = tuned,
+       tuning.table = if (length(tabs)) do.call(rbind, tabs) else NULL)
+}
+
+#' @keywords internal
+#' @noRd
 importance_percentile <- function(importance) {
   original_names <- names(importance) %||% paste0("V", seq_along(importance))
   importance <- abs(as.numeric(importance))
@@ -734,6 +1061,7 @@ native_gene_importance <- function(outcome.type, model, xtrain, ytrain,
       EN = native_importance_en(outcome.type, xtrain, ytrain, survdays, params),
       MB = native_importance_mb(outcome.type, xtrain, ytrain, survdays, params),
       DCT = native_importance_dct(outcome.type, xtrain, ytrain, survdays, params),
+      NN = native_importance_nn(outcome.type, xtrain, ytrain, survdays, params),
       NULL
     )
   }
@@ -767,6 +1095,13 @@ native_importance_xg <- function(outcome.type, xtrain, ytrain, survdays, params)
     )
     label <- ifelse(as.numeric(ytrain) == 1, survdays, -survdays)
     dtrain <- xgboost::xgb.DMatrix(as.matrix(xtrain), label = label)
+  } else if (outcome.type == "continuous") {
+    pars <- utils::modifyList(
+      list(objective = "reg:squarederror", eval_metric = "rmse",
+           max_depth = 2, eta = 0.05, verbosity = 0, nthread = 1),
+      params
+    )
+    dtrain <- xgboost::xgb.DMatrix(as.matrix(xtrain), label = as.numeric(ytrain))
   } else {
     cls <- as.integer(as.factor(ytrain)) - 1
     pars <- utils::modifyList(
@@ -797,6 +1132,15 @@ native_importance_rf <- function(outcome.type, xtrain, ytrain, survdays, params)
     return(setNames(abs(as.numeric(imp[colnames(xtrain)])), colnames(xtrain)))
   }
   params <- utils::modifyList(list(ntree = 300, importance = TRUE), params)
+  if (outcome.type == "continuous") {
+    fit <- do.call(
+      randomForest::randomForest,
+      c(list(x = xtrain, y = as.numeric(ytrain)), params)
+    )
+    imp <- randomForest::importance(fit)
+    if (is.matrix(imp)) imp <- rowMeans(abs(imp), na.rm = TRUE)
+    return(setNames(abs(as.numeric(imp[colnames(xtrain)])), colnames(xtrain)))
+  }
   fit <- do.call(
     randomForest::randomForest,
     c(list(x = xtrain, y = as.factor(ytrain)), params)
@@ -831,6 +1175,14 @@ native_importance_gb <- function(outcome.type, xtrain, ytrain, survdays, params)
              data = dat[, c("time", "y", colnames(xtrain)), drop = FALSE]),
         params)
     )
+  } else if (outcome.type == "continuous") {
+    params <- utils::modifyList(
+      list(distribution = "gaussian", n.trees = 100,
+           interaction.depth = 2, shrinkage = 0.05, n.cores = 1,
+           verbose = FALSE),
+      params
+    )
+    fit <- do.call(gbm::gbm, c(list(formula = y ~ ., data = dat), params))
   } else {
     dat$y <- as.factor(dat$y)
     params <- utils::modifyList(
@@ -863,6 +1215,11 @@ native_importance_en <- function(outcome.type, xtrain, ytrain, survdays, params)
     fit <- do.call(glmnet::cv.glmnet, c(list(x = as.matrix(xtrain), y = ysurv), params))
     cf <- as.matrix(stats::coef(fit, s = params$s %||% "lambda.min"))
     imp <- abs(cf[, 1])
+  } else if (outcome.type == "continuous") {
+    params <- utils::modifyList(list(alpha = 0.2, family = "gaussian", nfolds = 3), params)
+    fit <- do.call(glmnet::cv.glmnet, c(list(x = as.matrix(xtrain), y = as.numeric(ytrain)), params))
+    cf <- as.matrix(stats::coef(fit, s = s.val))
+    imp <- abs(cf[setdiff(rownames(cf), "(Intercept)"), 1])
   } else {
     params <- utils::modifyList(list(alpha = 0.2, family = "multinomial", nfolds = 3), params)
     fit <- do.call(glmnet::cv.glmnet, c(list(x = as.matrix(xtrain), y = as.factor(ytrain)), params))
@@ -897,6 +1254,15 @@ native_importance_mb <- function(outcome.type, xtrain, ytrain, survdays, params)
       mboost::glmboost,
       c(list(formula = survival::Surv(time, status) ~ ., data = dat,
              family = mboost::CoxPH(), control = ctrl), params)
+    )
+    return(mb_coef_importance(stats::coef(fit, off2int = TRUE), colnames(xtrain)))
+  }
+  if (outcome.type == "continuous") {
+    dat <- data.frame(y = as.numeric(ytrain), xtrain)
+    fit <- do.call(
+      mboost::glmboost,
+      c(list(formula = y ~ ., data = dat, family = mboost::Gaussian(),
+             control = ctrl), params)
     )
     return(mb_coef_importance(stats::coef(fit, off2int = TRUE), colnames(xtrain)))
   }
@@ -942,6 +1308,15 @@ native_importance_dct <- function(outcome.type, xtrain, ytrain, survdays, params
       method = "exp",
       control = do.call(rpart::rpart.control, control_args)
     )
+  } else if (outcome.type == "continuous") {
+    dat <- data.frame(y = as.numeric(ytrain), xtrain)
+    control_args <- utils::modifyList(list(cp = 0.001, minsplit = 10), params)
+    fit <- rpart::rpart(
+      y ~ .,
+      data = dat,
+      method = "anova",
+      control = do.call(rpart::rpart.control, control_args)
+    )
   } else {
     dat <- data.frame(y = as.factor(ytrain), xtrain)
     method <- params$method %||% "class"
@@ -958,6 +1333,113 @@ native_importance_dct <- function(outcome.type, xtrain, ytrain, survdays, params
   if (!is.null(fit$variable.importance)) {
     vi <- fit$variable.importance
     imp[names(vi)] <- as.numeric(vi)
+  }
+  imp
+}
+
+#' @keywords internal
+#' @noRd
+native_importance_nn <- function(outcome.type, xtrain, ytrain, survdays, params) {
+  params <- utils::modifyList(
+    list(size = 5, decay = 1e-4, maxit = 200, trace = FALSE,
+         MaxNWts = 10000),
+    params
+  )
+  xtrain <- as.data.frame(xtrain)
+  genes <- colnames(xtrain)
+  if (!length(genes)) return(setNames(numeric(0), character(0)))
+
+  pred_fun <- function(xnew) {
+    if (outcome.type == "survival") {
+      return(do.call(
+        survival_nn_predict,
+        c(list(xtrain = xtrain, time = survdays, status = ytrain,
+               xtest = xnew), params)
+      ))
+    }
+
+    scaled <- continuous_scale_data(xtrain, xnew)
+    xtr <- as.matrix(scaled$train)
+    xte <- as.matrix(scaled$test)
+    xtr[!is.finite(xtr)] <- 0
+    xte[!is.finite(xte)] <- 0
+
+    if (outcome.type == "continuous") {
+      y <- as.numeric(ytrain)
+      y.center <- mean(y, na.rm = TRUE)
+      y.scale <- stats::sd(y, na.rm = TRUE)
+      if (!is.finite(y.scale) || y.scale < 1e-8) {
+        return(rep(y.center, nrow(xte)))
+      }
+      y.scaled <- as.numeric(scale(y, center = y.center, scale = y.scale))
+      fit <- tryCatch(
+        do.call(nnet::nnet,
+                c(list(x = xtr, y = y.scaled, linout = TRUE), params)),
+        error = function(e) NULL
+      )
+      if (is.null(fit)) return(rep(NA_real_, nrow(xte)))
+      return(as.numeric(stats::predict(fit, xte)) * y.scale + y.center)
+    }
+
+    if (outcome.type == "binary") {
+      y <- as.numeric(ytrain)
+      fit <- tryCatch(
+        do.call(nnet::nnet,
+                c(list(x = xtr, y = y, linout = FALSE), params)),
+        error = function(e) NULL
+      )
+      if (is.null(fit)) return(rep(NA_real_, nrow(xte)))
+      return(as.numeric(stats::predict(fit, xte)))
+    }
+
+    y.fac <- as.factor(ytrain)
+    classes <- levels(y.fac)
+    y.mat <- stats::model.matrix(~ y.fac - 1)
+    fit <- tryCatch(
+      do.call(nnet::nnet,
+              c(list(x = xtr, y = y.mat, softmax = TRUE), params)),
+      error = function(e) NULL
+    )
+    if (is.null(fit)) {
+      out <- matrix(NA_real_, nrow = nrow(xte), ncol = length(classes))
+      colnames(out) <- classes
+      return(out)
+    }
+    pred <- as.matrix(stats::predict(fit, xte, type = "raw"))
+    if (ncol(pred) == length(classes)) colnames(pred) <- classes
+    pred
+  }
+
+  loss_fun <- function(pred) {
+    if (outcome.type == "survival") {
+      ci <- survival_cindex(survdays, ytrain, pred)[["cindex"]]
+      return(-ci)
+    }
+    if (outcome.type == "continuous") {
+      return(continuous_metric_values(ytrain, pred)[["rmse"]])
+    }
+    if (outcome.type == "binary") {
+      y <- as.numeric(ytrain)
+      pred <- pmin(1 - 1e-6, pmax(1e-6, as.numeric(pred)))
+      return(-mean(y * log(pred) + (1 - y) * log(1 - pred), na.rm = TRUE))
+    }
+    y.fac <- as.factor(ytrain)
+    cls <- levels(y.fac)
+    pred <- as.matrix(pred)
+    pred <- pmin(1 - 1e-6, pmax(1e-6, pred))
+    idx <- cbind(seq_along(y.fac), match(as.character(y.fac), cls))
+    -mean(log(pred[idx]), na.rm = TRUE)
+  }
+
+  base.pred <- pred_fun(xtrain)
+  base.loss <- loss_fun(base.pred)
+  imp <- setNames(rep(0, length(genes)), genes)
+  if (!is.finite(base.loss)) return(imp)
+  for (g in genes) {
+    xp <- xtrain
+    xp[[g]] <- sample(xp[[g]], length(xp[[g]]), replace = FALSE)
+    perm.loss <- loss_fun(pred_fun(xp))
+    imp[g] <- if (is.finite(perm.loss)) max(0, perm.loss - base.loss) else 0
   }
   imp
 }

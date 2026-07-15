@@ -8,7 +8,7 @@
 #' percentile.
 #'
 #' @param outcome.type Character string specifying the prediction task. Must be
-#' one of `"survival"`, `"binary"`, or `"categorical"`.
+#' one of `"survival"`, `"binary"`, `"categorical"`, or `"continuous"`.
 #' @param outcome Outcome vector. For survival, this is the event/status vector.
 #' @param data Numeric matrix or data frame with samples in rows and genes or
 #' celltype-specific gene features in columns.
@@ -17,7 +17,7 @@
 #' are expanded to celltype-specific columns using the same mapping rules as
 #' `pathway_select()`.
 #' @param models Character vector of native-importance models to use. Supported
-#' values are `"XG"`, `"RF"`, `"GB"`, `"EN"`, `"MB"`, and `"DCT"`.
+#' values are `"XG"`, `"RF"`, `"GB"`, `"EN"`, `"MB"`, `"DCT"`, and `"NN"`.
 #' @param iter Integer number of repeated fold splits.
 #' @param num.folds Integer number of folds per iteration.
 #' @param survdays Numeric survival time vector required when
@@ -245,13 +245,20 @@
 #'
 #' @export
 gene_select <- function(outcome.type, outcome, data, features,
-                        models = c("XG", "RF", "GB", "EN", "MB", "DCT"),
+                        models = c("XG", "RF", "GB", "EN", "MB", "DCT", "NN"),
                         iter = 1, num.folds = NULL, survdays = NULL,
                         min.pathway.size = 30,
                         gene.stability.quantile = 0.75,
                         gene.min.stability = 0.25,
                         max.genes = min.pathway.size,
                         param.models = NULL,
+                        auto.tune = FALSE,
+                        tune.method = c("random", "grid", "successive_halving",
+                                        "hyperband", "bayes"),
+                        tune.n = 5,
+                        tune.folds = 3,
+                        tune.iter = 1,
+                        tune.models = NULL,
                         celltypes = NULL,
                         celltype.sep = c("_", ".", "-", ":", "|"),
                         celltype.position = c("auto", "suffix", "prefix"),
@@ -274,7 +281,7 @@ gene_select <- function(outcome.type, outcome, data, features,
                         llm.temperature = 0,
                         verbose = TRUE) {
   type_out <- tolower(outcome.type)
-  if (!type_out %in% c("binary", "categorical", "survival")) {
+  if (!type_out %in% c("binary", "categorical", "survival", "continuous")) {
     stop("Invalid outcome.type.")
   }
   if (type_out == "survival" && is.null(survdays)) {
@@ -282,11 +289,12 @@ gene_select <- function(outcome.type, outcome, data, features,
   }
   data <- as.data.frame(data)
   models <- unique(toupper(models))
-  supported <- c("XG", "RF", "GB", "EN", "MB", "DCT")
+  supported <- c("XG", "RF", "GB", "EN", "MB", "DCT", "NN")
   models <- intersect(models, supported)
   if (!length(models)) stop("No supported native-importance models supplied.")
   if (is.null(num.folds)) num.folds <- 3
   if (!is.list(features)) stop("features must be a list of pathways.")
+  tune.method <- match.arg(tune.method)
   gene.prior.method <- match.arg(gene.prior.method)
   llm.provider <- match.arg(llm.provider)
   if (gene.prior.method != "none") {
@@ -310,11 +318,34 @@ gene_select <- function(outcome.type, outcome, data, features,
   selected <- list()
   ranking_tables <- list()
   raw_records <- list()
+  tuning_records <- list()
 
   for (pathway_name in names(features)) {
     genes <- unique(features[[pathway_name]])
     genes <- genes[genes %in% colnames(data)]
     if (!length(genes)) next
+    pathway.params <- param.models %||% list()
+    if (isTRUE(auto.tune)) {
+      tuned <- caspen_auto_tune_params(
+        outcome.type = type_out,
+        outcome = outcome,
+        x = data[, genes, drop = FALSE],
+        models = models,
+        param.indiv = pathway.params,
+        tune.method = tune.method,
+        tune.n = tune.n,
+        tune.folds = tune.folds,
+        tune.iter = tune.iter,
+        tune.models = tune.models,
+        survdays = if (type_out == "survival") survdays else NULL,
+        seed = match(pathway_name, names(features))
+      )
+      pathway.params <- tuned$param.indiv
+      if (!is.null(tuned$tuning.table)) {
+        tuned$tuning.table$pathway <- pathway_name
+        tuning_records[[pathway_name]] <- tuned$tuning.table
+      }
+    }
 
     if (length(genes) <= min.pathway.size) {
       tab <- data.frame(
@@ -365,7 +396,7 @@ gene_select <- function(outcome.type, outcome, data, features,
           }
           imp <- native_gene_importance(
             type_out, model, xtrain, ytrain, ttrain,
-            param.models[[model]] %||% list(),
+            pathway.params[[model]] %||% list(),
             suppress.warnings = suppress.model.warnings
           )
           if (is.null(imp)) next
@@ -468,8 +499,14 @@ gene_select <- function(outcome.type, outcome, data, features,
       max.genes = max.genes,
       gene.prior.method = gene.prior.method,
       gene.hybrid.weights = gene.hybrid.weights,
+      auto.tune = auto.tune,
+      tune.method = tune.method,
+      tune.n = tune.n,
+      tune.folds = tune.folds,
+      tune.iter = tune.iter,
       suppress.model.warnings = suppress.model.warnings
-    )
+    ),
+    tuning = if (length(tuning_records)) do.call(rbind, tuning_records) else NULL
   )
 }
 

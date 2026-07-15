@@ -33,7 +33,7 @@ caspen_model_info <- function() {
       "e1071 SVM for classification; survivalsvm for survival.",
       "naivebayes/e1071 implementations depending on task.",
       "rpart decision trees for classification and survival-style trees.",
-      "neuralnet/nnet depending on outcome type and helper function.",
+      "neuralnet/nnet depending on outcome type; gene_select uses NN permutation importance.",
       "JOUSBoost AdaBoost helper for classification and time-point survival risk.",
       "mboost glmboost for binary, multiclass one-vs-rest, and Cox boosting."
     ),

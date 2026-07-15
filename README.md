@@ -4,7 +4,8 @@
 **en**semble) is an R package for building interpretable pathway-level
 prediction models from bulk or celltype-specific omics data.
 
-CASPEN supports **binary**, **survival**, and **categorical** outcomes. It can
+CASPEN supports **binary**, **survival**, **categorical**, and **continuous**
+outcomes. It can
 evaluate individual models and stacked ensemble models, report AUC or C-index,
 calculate sensitivity at 95% specificity (SP95), select pathways, select genes
 within pathways, and optionally use literature/LLM priors.
@@ -15,7 +16,8 @@ CASPEN is designed for analyses where the user has:
 
 - an omics matrix, such as RNA, protein, or celltype-specific expression;
 - pathway or gene-set definitions, for example MSigDB/Reactome/KEGG/user lists;
-- an outcome, such as response/non-response, survival time/status, or subtype;
+- an outcome, such as response/non-response, survival time/status, subtype, or
+  a continuous phenotype/score;
 - optional celltype names and aliases;
 - optional literature prior information.
 
@@ -176,6 +178,52 @@ Plot pathway selection:
 plot_pathway_selection(path_res)
 ```
 
+For celltype-aware runs, CASPEN also reports an entropy-based celltype
+specificity index for each parent pathway. Values closer to 1 mean the
+predictive signal is concentrated in one celltype; values closer to 0 mean the
+signal is spread across celltypes.
+
+```r
+ct_res$celltype.map
+ct_res$celltype.specificity
+ct_res$celltype.specificity.by.model
+```
+
+### Optional Fast Hyperparameter Tuning
+
+For a more data-adaptive run, set `auto.tune = TRUE`. CASPEN samples
+`tune.n` candidate parameter settings for each selected model, scores them by
+quick internal CV on the pathway data, then runs the main repeated CV with the
+best setting for that pathway.
+
+```r
+tuned_path_res <- pathway_select(
+  outcome.type = "binary",
+  outcome = y,
+  data = x,
+  features = pathways[1:5],
+  models.indiv = c("RF", "EN", "GB"),
+  iter = 5,
+  num.folds = 3,
+  auto.tune = TRUE,
+  tune.method = "random",
+  tune.n = 5,
+  tune.folds = 2,
+  tune.iter = 1
+)
+
+tuned_path_res$auc
+tuned_path_res$SP.95
+tuned_path_res$tuning.table
+```
+
+`tune.method = "random"` is the recommended fast option. `"grid"` is available
+for small searches. `"successive_halving"`, `"hyperband"`, and `"bayes"` are
+accepted as API values and currently use the same fast random-search backend.
+The same `auto.tune`, `tune.method`, `tune.n`, `tune.folds`, `tune.iter`, and
+`tune.models` arguments are available in `Train_perform_CV()`, `Test_perform()`,
+and `gene_select()`.
+
 ## 2. Survival Outcomes
 
 For survival outcomes, CASPEN uses C-index as the primary metric when
@@ -216,7 +264,44 @@ cat_res$auc
 cat_res$SP.95
 ```
 
-## 4. Celltype-Aware Pathway Mapping
+## 4. Continuous Outcomes
+
+For continuous outcomes, CASPEN fits regression models and returns all four
+metrics: `C.index`, `R2`, `MAE`, and `RMSE`. The user can decide which metric to
+use for selection and reporting. Here C-index is a rank-concordance metric: it
+measures how often the predicted values correctly rank pairs of samples by the
+observed continuous outcome.
+
+```r
+continuous_y <- as.numeric(scale(rowMeans(x[, 1:5, drop = FALSE])))
+
+cont_res <- pathway_select(
+  outcome.type = "continuous",
+  outcome = continuous_y,
+  data = x,
+  features = pathways[1:5],
+  models.indiv = c("XG", "RF", "EN", "GB", "KNN", "SVM", "DCT", "NN", "MB"),
+  iter = 5,
+  num.folds = 3,
+  continuous.metric = "cindex",
+  ensemble = TRUE,
+  models.ens = c("RF", "EN", "GB")
+)
+
+cont_res$R2
+cont_res$RMSE
+cont_res$MAE
+cont_res$C.index
+```
+
+Use `continuous.metric = "r2"`, `"cindex"`, `"mae"`, or `"rmse"` to choose the
+pathway-selection criterion. For `MAE` and `RMSE`, CASPEN ranks pathways by
+lower error internally, while still returning the original error values.
+
+`NB` is classification-only and is skipped for continuous outcomes. `ADB` is
+implemented as a squared-error gradient boosting fallback for regression.
+
+## 5. Celltype-Aware Pathway Mapping
 
 If the data columns encode gene and celltype-specific expression, CASPEN can
 evaluate pathway-celltype tasks. Provide the celltypes and optional aliases.
@@ -252,7 +337,7 @@ Rules:
   matching celltypes.
 - Users control mapping through `celltype.aliases`.
 
-## 5. Literature Priors With Existing MSigDB/User Pathways
+## 6. Literature Priors With Existing MSigDB/User Pathways
 
 If your pathway list already contains MSigDB signatures, use LLM/literature
 support mainly for **prior weights** and **concept matching**, not for final
@@ -388,11 +473,13 @@ path_res$llm$evidence   # evidence table
 The user can then apply study-specific cutoffs for data metric, SP95, and prior
 weight.
 
-## 6. Gene Selection Within Pathways
+## 7. Gene Selection Within Pathways
 
 `gene_select()` ranks genes within selected pathways using native model
-importance where available. Importance scores from different models are
-converted to within-run percentiles, then summarized with stability.
+importance where available. For `NN`, CASPEN uses permutation importance because
+neural networks do not expose a simple native coefficient/variable-importance
+table. Importance scores from different models are converted to within-run
+percentiles, then summarized with stability.
 
 ```r
 gene_res <- gene_select(
@@ -431,7 +518,26 @@ gene_res <- gene_select(
 )
 ```
 
-## 7. Training CV And Independent Test Performance
+Continuous outcomes are also supported in `gene_select()`:
+
+```r
+gene_cont <- gene_select(
+  outcome.type = "continuous",
+  outcome = continuous_y,
+  data = x,
+  features = cont_res$features,
+  models = c("XG", "RF", "GB", "EN", "MB", "DCT", "NN"),
+  iter = 5,
+  num.folds = 3,
+  min.pathway.size = 30,
+  max.genes = 30
+)
+
+gene_cont$selected.features
+head(gene_cont$ranking)
+```
+
+## 8. Training CV And Independent Test Performance
 
 ```r
 train_res <- Train_perform_CV(
@@ -469,7 +575,43 @@ test_res$auc
 test_res$SP.95
 ```
 
-## 8. Parallel Computing
+Continuous training/test examples:
+
+```r
+train_cont <- Train_perform_CV(
+  outcome.type = "continuous",
+  outcome = continuous_y,
+  train_data = x,
+  features = cont_res$features,
+  models.indiv = c("RF", "EN", "GB"),
+  iter = 10,
+  num.folds = 3,
+  ensemble = TRUE,
+  models.ens = c("RF", "EN")
+)
+
+train_cont$R2
+train_cont$RMSE
+train_cont$C.index
+
+test_cont <- Test_perform(
+  outcome.type = "continuous",
+  outcome = continuous_y,
+  train_data = x,
+  test_data = test_x,
+  test_outcome = continuous_test_y,
+  features = cont_res$features,
+  models.indiv = c("RF", "EN", "GB"),
+  ensemble = TRUE,
+  models.ens = c("RF", "EN")
+)
+
+test_cont$R2
+test_cont$RMSE
+test_cont$C.index
+```
+
+## 9. Parallel Computing
 
 CASPEN uses the `future` backend.
 
@@ -505,7 +647,7 @@ train_res <- Train_perform_CV(
 )
 ```
 
-## 9. Shiny Demo
+## 10. Shiny Demo
 
 CASPEN includes a lightweight Shiny app for demos and collaborator
 walkthroughs:
@@ -520,4 +662,38 @@ performance, plots, LLM/PubMed/PubTator priors, and the R code used for each
 run. It is intended for small examples. Use R scripts or HPC/server jobs for
 large analyses.
 
+## GitHub Pages Website
 
+This repository includes a `pkgdown` configuration and a GitHub Actions
+workflow for GitHub Pages.
+
+After pushing to GitHub:
+
+1. Go to repository **Settings -> Pages**.
+2. Set **Source** to **GitHub Actions**.
+3. Push to the `main` branch.
+4. The workflow will build and deploy the package website.
+
+Expected site URL:
+
+```text
+https://Shrabanti87.github.io/CASPEN/
+```
+
+## Suggested Repository Push
+
+From the GitHub-ready folder:
+
+```bash
+git init
+git add .
+git commit -m "Initial CASPEN package"
+git branch -M main
+git remote add origin https://github.com/Shrabanti87/CASPEN.git
+git push -u origin main
+```
+
+## Citation
+
+Citation details can be added after the manuscript or software citation is
+available.

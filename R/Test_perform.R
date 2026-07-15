@@ -95,10 +95,42 @@
 Test_perform <- function(outcome.type, outcome, survdays = NULL, time_point = NULL,
                          train_data, test_data, test_outcome, test_time = NULL,
                          features, models.indiv, ensemble = FALSE, models.ens = NULL,
-                         param.indiv = NULL, param.ens = NULL) {
+                         param.indiv = NULL, param.ens = NULL,
+                         auto.tune = FALSE,
+                         tune.method = c("random", "grid", "successive_halving",
+                                         "hyperband", "bayes"),
+                         tune.n = 5,
+                         tune.folds = 3,
+                         tune.iter = 1,
+                         tune.models = NULL) {
   type_out <- tolower(outcome.type)
-  if (!type_out %in% c("binary", "categorical", "survival")) {
-    stop("Invalid outcome.type: Must be 'binary', 'categorical', or 'survival'.")
+  tune.method <- match.arg(tune.method)
+  if (!type_out %in% c("binary", "categorical", "survival", "continuous")) {
+    stop("Invalid outcome.type: Must be 'binary', 'categorical', 'survival', or 'continuous'.")
+  }
+  tuning.table <- NULL
+  if (isTRUE(auto.tune)) {
+    tune.genes <- unique(unlist(lapply(features, extract_pathway_genes)))
+    tune.genes <- tune.genes[tune.genes %in% colnames(train_data)]
+    if (length(tune.genes)) {
+      tuned <- caspen_auto_tune_params(
+        outcome.type = type_out,
+        outcome = outcome,
+        x = train_data[, tune.genes, drop = FALSE],
+        models = models.indiv,
+        param.indiv = param.indiv,
+        tune.method = tune.method,
+        tune.n = tune.n,
+        tune.folds = tune.folds,
+        tune.iter = tune.iter,
+        tune.models = tune.models,
+        survdays = survdays,
+        time_point = time_point,
+        seed = 1
+      )
+      param.indiv <- tuned$param.indiv
+      tuning.table <- tuned$tuning.table
+    }
   }
   if (type_out == "binary") {
     res <- binary_test_performance(
@@ -145,7 +177,21 @@ Test_perform <- function(outcome.type, outcome, survdays = NULL, time_point = NU
       param.indiv  = param.indiv,
       param.ens    = param.ens
     )
+  } else if (type_out == "continuous") {
+    res <- continuous_test_performance(
+      outcome      = outcome,
+      train_data   = train_data,
+      test_data    = test_data,
+      test_outcome = test_outcome,
+      features     = features,
+      models.indiv = models.indiv,
+      ensemble     = ensemble,
+      models.ens   = models.ens,
+      param.indiv  = param.indiv,
+      param.ens    = param.ens
+    )
   }
 
+  if (isTRUE(auto.tune)) attr(res, "tuning") <- tuning.table
   return(res)
 }

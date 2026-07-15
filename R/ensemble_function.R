@@ -407,6 +407,14 @@ pathway_select <- function(outcome.type, outcome, features, data, models.indiv, 
                            celltype.sep = c("_", ".", "-", ":", "|"),
                            celltype.position = c("auto", "suffix", "prefix"),
                            celltype.aliases = NULL,
+                           continuous.metric = c("r2", "cindex", "mae", "rmse"),
+                           auto.tune = FALSE,
+                           tune.method = c("random", "grid", "successive_halving",
+                                           "hyperband", "bayes"),
+                           tune.n = 5,
+                           tune.folds = 3,
+                           tune.iter = 1,
+                           tune.models = NULL,
                            parallel.iter = FALSE,
                            parallel.pathways = FALSE,
                            workers = future::availableCores(),
@@ -416,14 +424,17 @@ pathway_select <- function(outcome.type, outcome, features, data, models.indiv, 
   AUC.mat <- CI.low.mat <- CI.up.mat <- SP.98.mat <- SP.95.mat <- NULL
   SP.95.CI.low.mat <- SP.95.CI.up.mat <- NULL
   CINDEX.mat <- CINDEX.CI.low.mat <- CINDEX.CI.up.mat <- NULL
+  R2.mat <- RMSE.mat <- MAE.mat <- CONT.CINDEX.mat <- NULL
   prior.mode <- match.arg(prior.mode)
   llm.mode <- match.arg(llm.mode)
   llm.provider <- match.arg(llm.provider)
   llm.prior.method <- match.arg(llm.prior.method)
   celltype.position <- match.arg(celltype.position)
+  continuous.metric <- match.arg(continuous.metric)
+  tune.method <- match.arg(tune.method)
 
   type_out <- tolower(outcome.type)
-  if (!type_out %in% c("binary", "categorical", "survival")) {
+  if (!type_out %in% c("binary", "categorical", "survival", "continuous")) {
     stop("Invalid outcome.type.")
   }
 
@@ -468,6 +479,7 @@ pathway_select <- function(outcome.type, outcome, features, data, models.indiv, 
   features <- expand_celltype_pathways(features, colnames(data), celltypes,
                                        celltype.sep, celltype.position,
                                        celltype.aliases)
+  celltype.map <- attr(features, "celltype.map")
   path.names <- names(features)
   if (is.null(path.names)) path.names <- paste0("Pathway_", seq_along(features))
   names(features) <- path.names
@@ -480,6 +492,29 @@ pathway_select <- function(outcome.type, outcome, features, data, models.indiv, 
     data_to_pass <- data[, colnames(data) %in% com, drop = FALSE]
     colnames(data_to_pass) <- make.names(colnames(data_to_pass), unique = TRUE)
     inner_parallel_iter <- isTRUE(parallel.iter) && !isTRUE(parallel.pathways)
+    tuned.param.indiv <- param.indiv
+    tuning.table <- NULL
+    if (isTRUE(auto.tune) && ncol(data_to_pass) > 0) {
+      tuned <- caspen_auto_tune_params(
+        outcome.type = type_out,
+        outcome = outcome,
+        x = data_to_pass,
+        models = models.indiv,
+        param.indiv = param.indiv,
+        tune.method = tune.method,
+        tune.n = tune.n,
+        tune.folds = tune.folds,
+        tune.iter = tune.iter,
+        tune.models = tune.models,
+        survdays = survdays,
+        time_point = time_point,
+        continuous.metric = continuous.metric,
+        seed = f
+      )
+      tuned.param.indiv <- tuned$param.indiv
+      tuning.table <- tuned$tuning.table
+      if (!is.null(tuning.table)) tuning.table$pathway <- path.names[[f]]
+    }
 
     if (type_out == "binary") {
       res <- run_model_iterations(
@@ -489,7 +524,7 @@ pathway_select <- function(outcome.type, outcome, features, data, models.indiv, 
         ensemble = ensemble,
         outcome = outcome, x = data_to_pass, models.indiv = models.indiv,
         num.folds = num.folds, models.ens = models.ens,
-        param.indiv = param.indiv, param.ens = param.ens
+        param.indiv = tuned.param.indiv, param.ens = param.ens
       )
     } else if (type_out == "survival") {
       if (is.null(survdays) || is.null(time_point))
@@ -501,8 +536,18 @@ pathway_select <- function(outcome.type, outcome, features, data, models.indiv, 
         ensemble = ensemble,
         outcome = outcome, survdays = survdays, x = data_to_pass,
         models.indiv = models.indiv, num.folds = num.folds,
-        models.ens = models.ens, param.indiv = param.indiv,
+        models.ens = models.ens, param.indiv = tuned.param.indiv,
         param.ens = param.ens, time_point = time_point
+      )
+    } else if (type_out == "continuous") {
+      res <- run_model_iterations(
+        continuous_model, iter = iter, workers = workers,
+        parallel.iter = inner_parallel_iter, future.seed = future.seed,
+        future.strategy = future.strategy,
+        ensemble = ensemble,
+        outcome = outcome, x = data_to_pass, models.indiv = models.indiv,
+        num.folds = num.folds, models.ens = models.ens,
+        param.indiv = tuned.param.indiv, param.ens = param.ens
       )
     } else {
       res <- run_model_iterations(
@@ -512,7 +557,7 @@ pathway_select <- function(outcome.type, outcome, features, data, models.indiv, 
         ensemble = ensemble,
         outcome = outcome, x = data_to_pass, models.indiv = models.indiv,
         num.folds = num.folds, models.ens = models.ens,
-        param.indiv = param.indiv, param.ens = param.ens
+        param.indiv = tuned.param.indiv, param.ens = param.ens
       )
     }
     message("Done pathway training")
@@ -522,10 +567,13 @@ pathway_select <- function(outcome.type, outcome, features, data, models.indiv, 
     } else if (type_out == "survival") {
       survival_roc(outcome, survdays, time_point, res, models.indiv, iter,
                    ensemble, models.ens)
+    } else if (type_out == "continuous") {
+      continuous_metrics(outcome, res, models.indiv, iter, ensemble, models.ens)
     } else {
       categorical_roc(res, outcome, models.indiv, iter, ensemble, models.ens)
     }
     message("ROC done")
+    attr(result, "tuning") <- tuning.table
     result
   }
 
@@ -548,6 +596,8 @@ pathway_select <- function(outcome.type, outcome, features, data, models.indiv, 
   } else {
     pathway.results <- lapply(seq_along(features), run_one_pathway)
   }
+  tuning.results <- lapply(pathway.results, attr, "tuning")
+  names(tuning.results) <- path.names
 
   bind_result_metric <- function(metric.name) {
     mat <- do.call(rbind, lapply(pathway.results, `[[`, metric.name))
@@ -566,6 +616,11 @@ pathway_select <- function(outcome.type, outcome, features, data, models.indiv, 
     CINDEX.mat <- bind_result_metric("cindex")
     CINDEX.CI.low.mat <- bind_result_metric("cindex.ci.low")
     CINDEX.CI.up.mat <- bind_result_metric("cindex.ci.up")
+  } else if (type_out == "continuous") {
+    R2.mat <- bind_result_metric("r2")
+    RMSE.mat <- bind_result_metric("rmse")
+    MAE.mat <- bind_result_metric("mae")
+    CONT.CINDEX.mat <- bind_result_metric("cindex")
   }
 
   # Compute mean metrics
@@ -574,6 +629,15 @@ pathway_select <- function(outcome.type, outcome, features, data, models.indiv, 
   primary.metric <- mean.auc
   if (type_out == "survival" && !is.null(CINDEX.mat)) {
     primary.metric <- rowMeans(CINDEX.mat, na.rm = TRUE)
+  } else if (type_out == "continuous" && !is.null(R2.mat)) {
+    cont.metric.mat <- switch(
+      continuous.metric,
+      r2 = R2.mat,
+      cindex = CONT.CINDEX.mat,
+      mae = -MAE.mat,
+      rmse = -RMSE.mat
+    )
+    primary.metric <- rowMeans(cont.metric.mat, na.rm = TRUE)
   }
   selection.score <- primary.metric
 
@@ -618,6 +682,11 @@ pathway_select <- function(outcome.type, outcome, features, data, models.indiv, 
     CINDEX.mat <- CINDEX.mat[keep, , drop = FALSE]
     CINDEX.CI.low.mat <- CINDEX.CI.low.mat[keep, , drop = FALSE]
     CINDEX.CI.up.mat <- CINDEX.CI.up.mat[keep, , drop = FALSE]
+  } else if (type_out == "continuous") {
+    R2.mat <- R2.mat[keep, , drop = FALSE]
+    RMSE.mat <- RMSE.mat[keep, , drop = FALSE]
+    MAE.mat <- MAE.mat[keep, , drop = FALSE]
+    CONT.CINDEX.mat <- CONT.CINDEX.mat[keep, , drop = FALSE]
   }
 
   labels <- path.names[keep]
@@ -628,7 +697,13 @@ pathway_select <- function(outcome.type, outcome, features, data, models.indiv, 
   mean.sp95.keep <- mean.sp95[keep]
   prior.mat <- matrix(prior.keep, ncol = 1,
                       dimnames = list(labels, "prior.weight"))
-  data.metric.mat <- if (type_out == "survival") CINDEX.mat else AUC.mat
+  data.metric.mat <- if (type_out == "survival") {
+    CINDEX.mat
+  } else if (type_out == "continuous") {
+    R2.mat
+  } else {
+    AUC.mat
+  }
 
   rownames(AUC.mat)    <- labels
   rownames(CI.low.mat) <- labels
@@ -641,6 +716,12 @@ pathway_select <- function(outcome.type, outcome, features, data, models.indiv, 
     rownames(CINDEX.mat) <- labels
     rownames(CINDEX.CI.low.mat) <- labels
     rownames(CINDEX.CI.up.mat) <- labels
+    rownames(data.metric.mat) <- labels
+  } else if (type_out == "continuous") {
+    rownames(R2.mat) <- labels
+    rownames(RMSE.mat) <- labels
+    rownames(MAE.mat) <- labels
+    rownames(CONT.CINDEX.mat) <- labels
     rownames(data.metric.mat) <- labels
   }
 
@@ -659,9 +740,45 @@ pathway_select <- function(outcome.type, outcome, features, data, models.indiv, 
     colnames(CINDEX.CI.low.mat) <- all_models
     colnames(CINDEX.CI.up.mat) <- all_models
     colnames(data.metric.mat) <- all_models
+  } else if (type_out == "continuous") {
+    colnames(R2.mat) <- all_models
+    colnames(RMSE.mat) <- all_models
+    colnames(MAE.mat) <- all_models
+    colnames(CONT.CINDEX.mat) <- all_models
+    colnames(data.metric.mat) <- all_models
   }
-  if (type_out != "survival") {
+  if (!type_out %in% c("survival", "continuous")) {
     data.metric.mat <- AUC.mat
+  }
+  celltype.map.keep <- NULL
+  if (!is.null(celltype.map) && nrow(celltype.map)) {
+    celltype.map.keep <- celltype.map[match(labels, celltype.map$label), ,
+                                      drop = FALSE]
+  }
+  specificity.metric.mat <- data.metric.mat
+  specificity.chance <- 0.5
+  specificity.lower <- FALSE
+  if (type_out == "continuous") {
+    specificity.metric.mat <- switch(
+      continuous.metric,
+      r2 = R2.mat,
+      cindex = CONT.CINDEX.mat,
+      mae = MAE.mat,
+      rmse = RMSE.mat
+    )
+    specificity.chance <- if (continuous.metric %in% c("r2", "mae", "rmse")) 0 else 0.5
+    specificity.lower <- continuous.metric %in% c("mae", "rmse")
+  }
+  celltype.specificity <- if (!is.null(celltype.map.keep) && nrow(celltype.map.keep)) {
+    celltype_specificity_summary(
+      metric.mat = specificity.metric.mat,
+      labels = labels,
+      celltype.map = celltype.map.keep,
+      chance = specificity.chance,
+      lower.is.better = specificity.lower
+    )
+  } else {
+    list(summary = NULL, by.model = NULL)
   }
 
   ret <- list(
@@ -680,20 +797,36 @@ pathway_select <- function(outcome.type, outcome, features, data, models.indiv, 
     selection.table = data.frame(
       pathway = labels,
       primary.metric = primary.keep,
+      primary.metric.name = if (type_out == "continuous") continuous.metric else
+        if (type_out == "survival") "cindex" else "auc",
       mean.auc = mean.auc.keep,
       mean.sp95 = mean.sp95.keep,
+      parent.pathway = if (!is.null(celltype.map.keep)) celltype.map.keep$pathway else labels,
+      celltype = if (!is.null(celltype.map.keep)) celltype.map.keep$celltype else NA_character_,
       prior = prior.keep,
       row.names = labels,
       check.names = FALSE
     ),
     features = features[keep],
-    label  = labels
+    label  = labels,
+    celltype.map = celltype.map.keep,
+    celltype.specificity = celltype.specificity$summary,
+    celltype.specificity.by.model = celltype.specificity$by.model
   )
+  if (isTRUE(auto.tune)) {
+    ret$tuning <- tuning.results[keep]
+    ret$tuning.table <- do.call(rbind, tuning.results[keep])
+  }
   if (!is.null(llm.result)) ret$llm <- llm.result
   if (type_out == "survival") {
     ret$C.index <- CINDEX.mat
     ret$C.index.CI.low <- CINDEX.CI.low.mat
     ret$C.index.CI.up <- CINDEX.CI.up.mat
+  } else if (type_out == "continuous") {
+    ret$R2 <- R2.mat
+    ret$RMSE <- RMSE.mat
+    ret$MAE <- MAE.mat
+    ret$C.index <- CONT.CINDEX.mat
   }
   ret
 }
