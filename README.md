@@ -4,11 +4,27 @@
 **en**semble) is an R package for building pathway-guided ensemble AI models
 for predicting clinical outcomes based on molecular data.
 
-CASPEN supports **binary**, **survival**, **categorical**, and **continuous**
-outcomes. It can
-evaluate individual models and stacked ensemble models, report AUC or C-index,
-calculate sensitivity at 95% specificity (SP95), select pathways, select genes
-within pathways, and optionally use literature/LLM priors.
+CASPEN provides a pathway-guided ensemble learning framework that integrates
+biologically curated pathways with cell-state-specific and spatial
+niche-informed gene signatures to predict binary (treatment response),
+multiclass (molecular subtypes), survival (time-to-event), and continuous
+clinical outcomes. To incorporate cell-type-specific contribution into
+prediction, CASPEN allows users to input celltype-specific molecular data as
+well as cell-state-specific and niche-informed gene signatures derived from
+single-cell and spatial transcriptomics data. CASPEN can also optionally curate
+priors from the literature using LLMs and/or place prior weights on
+user-provided pathways and gene sets.
+
+These functional annotations are incorporated into a hierarchical two-layer
+ensemble framework of deep learning models. The first layer constructs
+pathway-specific models for tumor and microenvironmental compartments,
+capturing compartment-specific effects. Predictions are then aggregated in a
+second-layer ensemble to produce robust and calibrated outcome predictions.
+CASPEN also allows pathway selection and selection of genes within pathways
+based on prediction performance metrics, importance, stability, and optional
+literature-based prior relevance. CASPEN reports an entropy-based celltype
+specificity index for each pathway that tells whether the predictive signal is
+concentrated in one celltype or spread across celltypes.
 
 ## What CASPEN Is For
 
