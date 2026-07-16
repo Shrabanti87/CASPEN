@@ -1,22 +1,23 @@
 Package: CASPEN
 Title: CASPEN: Celltype-Aware Stacked Pathway-Guided Ensemble Prediction
 Version: 0.0.1
-Authors@R:
-    c(
-      person("Shrabanti", "Chowdhury",
-        email = "shrabanti.chowdhury@mssm.edu",
-        role = "aut"
-      ),
-      person("Anna", "Xing",
-        email = "anna.xing@mssm.edu",
-        role = c("aut", "cre"),
-        comment = c(ORCID = "0009-0008-3487-4888")
-      ),
-      person("Pei", "Wang",
-        email = "pei.wang@mssm.edu",
-        role = "aut"
-      )
+Authors@R: c(
+    person("Shrabanti", "Chowdhury",
+      email = "shrabanti.chowdhury@mssm.edu",
+      role = "aut"
+    ),
+    person("Anna", "Xing",
+      email = "anna.xing@mssm.edu",
+      role = c("aut", "cre"),
+      comment = c(ORCID = "0009-0008-3487-4888")
+    ),
+    person("Pei", "Wang",
+      email = "pei.wang@mssm.edu",
+      role = "aut"
     )
+  )
+Author: Shrabanti Chowdhury, Anna Xing, Pei Wang
+Maintainer: Anna Xing <anna.xing@mssm.edu>
 Description: CASPEN (celltype aware stacked pathway guided ensemble) is a
     toolkit for training and evaluating celltype-aware pathway-guided ensemble
     models, with functionality for pathway selection, gene selection, model
