@@ -9,7 +9,7 @@ llm_literature_signatures(
   outcome.context,
   features = NULL,
   celltypes = NULL,
-  mode = c("both", "curate", "prior"),
+  mode = c("curate", "prior"),
   n.signatures = 10,
   max.genes = 80,
   min.genes = 5,
@@ -38,10 +38,9 @@ scores these existing pathway names.}
 \item{celltypes}{Optional cell type names. These are included in the prompt
 so the LLM can prioritize celltype-relevant biology.}
 
-\item{mode}{One of \code{"curate"}, \code{"prior"}, or \code{"both"}. \code{"curate"} returns
-new literature signatures only, \code{"prior"} returns prior weights for existing
-user pathways only, and \code{"both"} returns both new signatures and prior
-weights.}
+\item{mode}{One of \code{"curate"} or \code{"prior"}. \code{"curate"} returns
+disease/outcome-relevant concepts or signatures with prior weights;
+\code{"prior"} returns prior weights for existing user pathways only.}
 
 \item{n.signatures}{Maximum number of new literature signatures to request.}
 
@@ -192,14 +191,17 @@ hybrid_res <- llm_literature_signatures(
 hybrid_res$evidence[, c("pathway", "pubmed.score", "pubtator.score",
                         "llm.score", "evidence.score", "prior")]
 
-# 2e) Curate new disease/outcome-specific literature signatures.
-# This returns new gene sets, not pathway-selection performance.
+# 2e) Curate disease/outcome-specific literature concepts/signatures.
+# In pathway_select(), curated concepts can be mapped back to user pathways.
 curated_res <- llm_literature_signatures(
   disease = "high-grade serous ovarian cancer",
   outcome.context = "platinum resistance",
+  features = pathways,
   mode = "curate",
   n.signatures = 5,
   max.genes = 40,
+  prior.method = "hybrid",
+  hybrid.weights = c(pubmed_count = 0.5, llm = 0.5),
   pubmed = TRUE,
   pubmed.max = 5,
   email = "your.email@example.com",
@@ -208,25 +210,8 @@ curated_res <- llm_literature_signatures(
 )
 
 names(curated_res$literature.features)
+curated_res$pathway.prior
 curated_res$evidence
-
-# 2f) Curate new signatures and score both user and curated signatures.
-both_res <- llm_literature_signatures(
-  disease = "high-grade serous ovarian cancer",
-  outcome.context = "platinum resistance",
-  features = pathways,
-  mode = "both",
-  n.signatures = 5,
-  max.genes = 40,
-  prior.method = "hybrid",
-  hybrid.weights = c(pubmed_count = 0.5, llm = 0.5),
-  pubmed = FALSE,
-  model = "gpt-4o-mini",
-  temperature = NULL
-)
-
-both_res$literature.features
-both_res$pathway.prior
 
 # 3) Use the prior weights during pathway selection.
 path_res <- pathway_select(

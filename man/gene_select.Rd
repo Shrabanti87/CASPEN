@@ -9,7 +9,7 @@ gene_select(
   outcome,
   data,
   features,
-  models = c("XG", "RF", "GB", "EN", "MB", "DCT"),
+  models = c("XG", "RF", "GB", "EN", "MB", "DCT", "NN"),
   iter = 1,
   num.folds = NULL,
   survdays = NULL,
@@ -18,6 +18,12 @@ gene_select(
   gene.min.stability = 0.25,
   max.genes = min.pathway.size,
   param.models = NULL,
+  auto.tune = FALSE,
+  tune.method = c("random", "grid", "successive_halving", "hyperband", "bayes"),
+  tune.n = 5,
+  tune.folds = 3,
+  tune.iter = 1,
+  tune.models = NULL,
   celltypes = NULL,
   celltype.sep = c("_", ".", "-", ":", "|"),
   celltype.position = c("auto", "suffix", "prefix"),
@@ -40,7 +46,7 @@ gene_select(
 }
 \arguments{
 \item{outcome.type}{Character string specifying the prediction task. Must be
-one of \code{"survival"}, \code{"binary"}, or \code{"categorical"}.}
+one of \code{"survival"}, \code{"binary"}, \code{"categorical"}, or \code{"continuous"}.}
 
 \item{outcome}{Outcome vector. For survival, this is the event/status vector.}
 
@@ -53,7 +59,7 @@ are expanded to celltype-specific columns using the same mapping rules as
 \code{pathway_select()}.}
 
 \item{models}{Character vector of native-importance models to use. Supported
-values are \code{"XG"}, \code{"RF"}, \code{"GB"}, \code{"EN"}, \code{"MB"}, and \code{"DCT"}.}
+values are \code{"XG"}, \code{"RF"}, \code{"GB"}, \code{"EN"}, \code{"MB"}, \code{"DCT"}, and \code{"NN"}.}
 
 \item{iter}{Integer number of repeated fold splits.}
 

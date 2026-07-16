@@ -29,7 +29,8 @@ pathway_select(
   prior.default = NA_real_,
   prior.clip = c(0, 1),
   redundancy.thresh = NULL,
-  llm.mode = c("none", "curate", "prior", "both"),
+  llm.mode = c("none", "curate", "prior"),
+  llm.curate.action = c("match_pathways", "add_signatures"),
   disease = NULL,
   outcome.context = NULL,
   llm.provider = c("openai", "custom"),
@@ -50,6 +51,13 @@ pathway_select(
   celltype.sep = c("_", ".", "-", ":", "|"),
   celltype.position = c("auto", "suffix", "prefix"),
   celltype.aliases = NULL,
+  continuous.metric = c("r2", "cindex", "mae", "rmse"),
+  auto.tune = FALSE,
+  tune.method = c("random", "grid", "successive_halving", "hyperband", "bayes"),
+  tune.n = 5,
+  tune.folds = 3,
+  tune.iter = 1,
+  tune.models = NULL,
   parallel.iter = FALSE,
   parallel.pathways = FALSE,
   workers = future::availableCores(),
@@ -122,12 +130,16 @@ weights.}
 skip literature gene sets that are redundant with already supplied
 pathways.}
 
-\item{llm.mode}{Character string controlling live LLM curation. One of
-\code{"none"}, \code{"curate"}, \code{"prior"}, or \code{"both"}. \code{"curate"} adds new
-disease/outcome-specific literature signatures without using LLM priors,
-\code{"prior"} scores existing pathway names without adding new signatures, and
-\code{"both"} adds new signatures and reports priors for both existing and new
-signatures. No LLM call is made when \code{"none"}.}
+\item{llm.mode}{Character string controlling live LLM/literature use. One of
+\code{"none"}, \code{"curate"}, or \code{"prior"}. \code{"curate"} asks the LLM for
+disease/outcome-specific biological concepts, scores priors, maps those
+concepts to the user-provided pathway universe, and models only matched
+pathways. \code{"prior"} scores existing pathway names without curating concepts.
+No LLM call is made when \code{"none"}.}
+
+\item{llm.curate.action}{How curated LLM concepts are used. \code{"match_pathways"}
+maps concepts to the supplied pathway list and runs only matched pathways;
+\code{"add_signatures"} adds LLM-curated gene sets as new signatures.}
 
 \item{disease}{Disease context used for LLM curation, required when
 \code{llm.mode != "none"}.}

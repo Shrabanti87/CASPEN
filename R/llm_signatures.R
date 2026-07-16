@@ -29,10 +29,9 @@
 #' scores these existing pathway names.
 #' @param celltypes Optional cell type names. These are included in the prompt
 #' so the LLM can prioritize celltype-relevant biology.
-#' @param mode One of `"curate"`, `"prior"`, or `"both"`. `"curate"` returns
-#' new literature signatures only, `"prior"` returns prior weights for existing
-#' user pathways only, and `"both"` returns both new signatures and prior
-#' weights.
+#' @param mode One of `"curate"` or `"prior"`. `"curate"` returns
+#' disease/outcome-relevant concepts or signatures with prior weights;
+#' `"prior"` returns prior weights for existing user pathways only.
 #' @param n.signatures Maximum number of new literature signatures to request.
 #' @param max.genes Maximum number of genes per LLM-curated signature.
 #' @param min.genes Minimum number of curated genes that must map to the input
@@ -147,14 +146,17 @@
 #' hybrid_res$evidence[, c("pathway", "pubmed.score", "pubtator.score",
 #'                         "llm.score", "evidence.score", "prior")]
 #'
-#' # 2e) Curate new disease/outcome-specific literature signatures.
-#' # This returns new gene sets, not pathway-selection performance.
+#' # 2e) Curate disease/outcome-specific literature concepts/signatures.
+#' # In pathway_select(), curated concepts can be mapped back to user pathways.
 #' curated_res <- llm_literature_signatures(
 #'   disease = "high-grade serous ovarian cancer",
 #'   outcome.context = "platinum resistance",
+#'   features = pathways,
 #'   mode = "curate",
 #'   n.signatures = 5,
 #'   max.genes = 40,
+#'   prior.method = "hybrid",
+#'   hybrid.weights = c(pubmed_count = 0.5, llm = 0.5),
 #'   pubmed = TRUE,
 #'   pubmed.max = 5,
 #'   email = "your.email@example.com",
@@ -163,25 +165,8 @@
 #' )
 #'
 #' names(curated_res$literature.features)
+#' curated_res$pathway.prior
 #' curated_res$evidence
-#'
-#' # 2f) Curate new signatures and score both user and curated signatures.
-#' both_res <- llm_literature_signatures(
-#'   disease = "high-grade serous ovarian cancer",
-#'   outcome.context = "platinum resistance",
-#'   features = pathways,
-#'   mode = "both",
-#'   n.signatures = 5,
-#'   max.genes = 40,
-#'   prior.method = "hybrid",
-#'   hybrid.weights = c(pubmed_count = 0.5, llm = 0.5),
-#'   pubmed = FALSE,
-#'   model = "gpt-4o-mini",
-#'   temperature = NULL
-#' )
-#'
-#' both_res$literature.features
-#' both_res$pathway.prior
 #'
 #' # 3) Use the prior weights during pathway selection.
 #' path_res <- pathway_select(
@@ -234,7 +219,7 @@
 #' @export
 llm_literature_signatures <- function(disease, outcome.context,
                                       features = NULL, celltypes = NULL,
-                                      mode = c("both", "curate", "prior"),
+                                      mode = c("curate", "prior"),
                                       n.signatures = 10, max.genes = 80,
                                       min.genes = 5,
                                       provider = c("openai", "custom"),
@@ -248,6 +233,11 @@ llm_literature_signatures <- function(disease, outcome.context,
                                       hybrid.weights = c(pubmed_count = 0.5, llm = 0.5),
                                       prior.clip = c(0, 1),
                                       temperature = 0) {
+  if (identical(mode, "both")) {
+    warning("mode = 'both' is deprecated. Use mode = 'curate'; ",
+            "'curate' now curates concepts and scores priors.")
+    mode <- "curate"
+  }
   mode <- match.arg(mode)
   provider <- match.arg(provider)
   prior.method <- match.arg(prior.method)
@@ -263,7 +253,7 @@ llm_literature_signatures <- function(disease, outcome.context,
     feature.names <- paste0("Pathway_", seq_along(features))
   }
   input.gene.counts <- caspen_feature_gene_counts(features, feature.names)
-  needs.llm <- mode %in% c("curate", "both") || prior.method %in% c("llm", "hybrid")
+  needs.llm <- mode == "curate" || prior.method %in% c("llm", "hybrid")
   hybrid.weights.normalized <- caspen_normalize_hybrid_weights(hybrid.weights)
   pubmed.weight <- hybrid.weights.normalized[match("pubmed_count",
                                                    names(hybrid.weights.normalized))]
@@ -271,7 +261,7 @@ llm_literature_signatures <- function(disease, outcome.context,
   pubtator.weight <- hybrid.weights.normalized[match("pubtator",
                                                      names(hybrid.weights.normalized))]
   if (!length(pubtator.weight)) pubtator.weight <- NA_real_
-  needs.prior.components <- mode %in% c("prior", "both")
+  needs.prior.components <- mode %in% c("prior", "curate")
   needs.pubmed.count <- isTRUE(needs.prior.components) &&
     (prior.method == "pubmed_count" ||
     (prior.method == "hybrid" &&
@@ -377,13 +367,7 @@ llm_literature_signatures <- function(disease, outcome.context,
       genes <- llm.genes
       if (!is.null(valid.upper)) genes <- genes[genes %in% valid.upper]
       is.existing.pathway <- !is.na(existing.hit)
-      if (mode == "curate" && is.existing.pathway) {
-        next
-      }
-      is.new.curated.signature <- mode %in% c("curate", "both") && !is.existing.pathway
-      if (is.new.curated.signature && length(genes) < min.genes) {
-        next
-      }
+      is.new.curated.signature <- mode == "curate" && !is.existing.pathway
       if (is.new.curated.signature && length(genes) >= min.genes) {
         literature.features[[nm.out]] <- genes
       }
@@ -402,7 +386,7 @@ llm_literature_signatures <- function(disease, outcome.context,
       if (!is.finite(evidence.score)) {
         evidence.score <- caspen_pmid_evidence_score(sig$pmids %||% character(0))
       }
-      prior.out <- if (mode %in% c("prior", "both")) {
+      prior.out <- if (mode %in% c("prior", "curate")) {
         caspen_combine_prior_components(
           prior.method = prior.method,
           components = c(
@@ -415,7 +399,7 @@ llm_literature_signatures <- function(disease, outcome.context,
           hybrid.weights = hybrid.weights.normalized
         )
       } else NA_real_
-      if (mode %in% c("prior", "both")) {
+      if (mode %in% c("prior", "curate")) {
         pathway.prior <- c(pathway.prior, stats::setNames(prior.out, nm.out))
       }
       evidence_rows[[length(evidence_rows) + 1]] <- data.frame(
@@ -444,7 +428,7 @@ llm_literature_signatures <- function(disease, outcome.context,
 
   evidence <- if (length(evidence_rows)) do.call(rbind, evidence_rows) else data.frame()
 
-  if (mode %in% c("prior", "both") && length(feature.names)) {
+  if (mode == "prior" && length(feature.names)) {
     completed <- caspen_complete_prior_output(
       evidence = evidence,
       pathway.prior = pathway.prior,
@@ -706,9 +690,9 @@ caspen_llm_prompt <- function(disease, outcome.context, mode, feature.names,
   ct <- if (length(celltypes)) paste(celltypes, collapse = ", ") else "not supplied"
   task <- switch(
     mode,
-    curate = paste0("Propose up to ", n.signatures, " NEW disease/outcome-relevant gene signatures. Do not score priors."),
-    prior = "Assign prior weights to the existing pathway names only. Do not curate new signatures.",
-    both = paste0("Propose up to ", n.signatures, " NEW signatures and assign prior weights to both existing pathway names and new signatures.")
+    curate = paste0("Propose up to ", n.signatures,
+                    " disease/outcome-relevant biological concepts or gene signatures and assign prior weights to each."),
+    prior = "Assign prior weights to the existing pathway names only. Do not curate new signatures."
   )
   paste(
     "You are helping CASPEN, a celltype-aware pathway-guided ensemble prediction method.",
@@ -724,7 +708,7 @@ caspen_llm_prompt <- function(disease, outcome.context, mode, feature.names,
     '{"signatures":[{"name":"AKT_activation","genes":["GENE1","GENE2"],"prior":0.2,"celltype_score":0.2,"evidence_score":0.2,"pmids":["123"],"rationale":"brief evidence"}]}',
     "Use descriptive biological names such as AKT_activation, DNA_repair, TGF_beta_stromal_signaling, or macrophage_inflammation; do not use generic names such as signature_1.",
     "For new curated signatures, merge highly related biological concepts when needed so each returned signature has at least the minimum gene count.",
-    "Prior must be numeric from 0 to 1 where 1 is strongest direct evidence, except in curate-only mode where prior should be null.",
+    "Prior must be numeric from 0 to 1 where 1 is strongest direct evidence.",
     "If possible, celltype_score should quantify cell-type-specific relevance from 0 to 1, and evidence_score should quantify literature/citation strength from 0 to 1.",
     "For prior-only mode, include existing pathway names with empty genes if gene membership is not being curated.",
     "Do not include markdown.",

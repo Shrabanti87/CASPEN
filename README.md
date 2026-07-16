@@ -492,9 +492,9 @@ ollama_res <- llm_literature_signatures(
 
 - `llm.mode = "none"`: no LLM/literature curation.
 - `llm.mode = "prior"`: score user-provided pathways only.
-- `llm.mode = "curate"`: curate disease/outcome-relevant concepts. If user
-  pathways/MSigDB lists are supplied, use those as the trusted source of genes.
-- `llm.mode = "both"`: score user pathways and curate additional concepts.
+- `llm.mode = "curate"`: curate disease/outcome-relevant concepts, score their
+  literature priors, map those concepts to user-provided pathways/MSigDB lists,
+  and run only the matched pathways using the user-provided genes.
 
 CASPEN reports literature support separately from data performance:
 
@@ -503,6 +503,7 @@ path_res$data.metric    # AUC or C-index matrix
 path_res$SP.95          # SP95 matrix
 path_res$Prior.weight   # literature prior matrix/vector
 path_res$llm$evidence   # evidence table
+path_res$llm.concept.map # concept-to-user-pathway mapping for curate mode
 ```
 
 The user can then apply study-specific cutoffs for data metric, SP95, and prior

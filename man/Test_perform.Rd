@@ -18,7 +18,13 @@ Test_perform(
   ensemble = FALSE,
   models.ens = NULL,
   param.indiv = NULL,
-  param.ens = NULL
+  param.ens = NULL,
+  auto.tune = FALSE,
+  tune.method = c("random", "grid", "successive_halving", "hyperband", "bayes"),
+  tune.n = 5,
+  tune.folds = 3,
+  tune.iter = 1,
+  tune.models = NULL
 )
 }
 \arguments{

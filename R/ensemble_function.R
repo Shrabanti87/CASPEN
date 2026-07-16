@@ -39,17 +39,15 @@
 #' @param redundancy.thresh Optional Jaccard similarity threshold used to
 #' skip literature gene sets that are redundant with already supplied
 #' pathways.
-#' @param llm.mode Character string controlling live LLM curation. One of
-#' `"none"`, `"curate"`, `"prior"`, or `"both"`. `"curate"` asks the LLM for
-#' disease/outcome-specific biological concepts and, by default, maps those
-#' concepts to the user-provided pathway universe so only matched curated
-#' pathways are modeled. `"prior"` scores existing pathway names without adding
-#' new signatures, and `"both"` curates concepts and reports priors. No LLM call
-#' is made when `"none"`.
+#' @param llm.mode Character string controlling live LLM/literature use. One of
+#' `"none"`, `"curate"`, or `"prior"`. `"curate"` asks the LLM for
+#' disease/outcome-specific biological concepts, scores priors, maps those
+#' concepts to the user-provided pathway universe, and models only matched
+#' pathways. `"prior"` scores existing pathway names without curating concepts.
+#' No LLM call is made when `"none"`.
 #' @param llm.curate.action How curated LLM concepts are used. `"match_pathways"`
 #' maps concepts to the supplied pathway list and runs only matched pathways;
-#' `"add_signatures"` adds LLM-curated gene sets as new signatures; `"both"`
-#' does both.
+#' `"add_signatures"` adds LLM-curated gene sets as new signatures.
 #' @param disease Disease context used for LLM curation, required when
 #' `llm.mode != "none"`.
 #' @param outcome.context Outcome context used for LLM curation, required when
@@ -391,8 +389,8 @@ pathway_select <- function(outcome.type, outcome, features, data, models.indiv, 
                            prior.cut = NULL, prior.default = NA_real_,
                            prior.clip = c(0, 1),
                            redundancy.thresh = NULL,
-                           llm.mode = c("none", "curate", "prior", "both"),
-                           llm.curate.action = c("match_pathways", "add_signatures", "both"),
+                           llm.mode = c("none", "curate", "prior"),
+                           llm.curate.action = c("match_pathways", "add_signatures"),
                            disease = NULL,
                            outcome.context = NULL,
                            llm.provider = c("openai", "custom"),
@@ -432,7 +430,16 @@ pathway_select <- function(outcome.type, outcome, features, data, models.indiv, 
   CINDEX.mat <- CINDEX.CI.low.mat <- CINDEX.CI.up.mat <- NULL
   R2.mat <- RMSE.mat <- MAE.mat <- CONT.CINDEX.mat <- NULL
   prior.mode <- match.arg(prior.mode)
+  if (identical(llm.mode, "both")) {
+    warning("llm.mode = 'both' is deprecated. Use llm.mode = 'curate'; ",
+            "'curate' now maps concepts and scores priors.")
+    llm.mode <- "curate"
+  }
   llm.mode <- match.arg(llm.mode)
+  if (identical(llm.curate.action, "both")) {
+    warning("llm.curate.action = 'both' is deprecated. Using 'match_pathways'.")
+    llm.curate.action <- "match_pathways"
+  }
   llm.curate.action <- match.arg(llm.curate.action)
   llm.provider <- match.arg(llm.provider)
   llm.prior.method <- match.arg(llm.prior.method)
@@ -453,7 +460,7 @@ pathway_select <- function(outcome.type, outcome, features, data, models.indiv, 
       outcome.context = outcome.context,
       features = features,
       celltypes = celltypes,
-      mode = if (llm.mode == "both") "both" else llm.mode,
+      mode = llm.mode,
       n.signatures = llm.n.signatures,
       max.genes = llm.max.genes,
       min.genes = llm.min.genes,
@@ -470,12 +477,26 @@ pathway_select <- function(outcome.type, outcome, features, data, models.indiv, 
       prior.clip = prior.clip,
       temperature = llm.temperature
     )
-    if (llm.mode %in% c("curate", "both") &&
-        llm.curate.action %in% c("match_pathways", "both")) {
+    if (llm.mode == "curate" &&
+        llm.curate.action == "match_pathways") {
       matched <- caspen_match_curated_concepts(features, llm.result)
       llm.concept.map <- matched$map
       if (!is.null(llm.concept.map) && nrow(llm.concept.map)) {
         features <- matched$features
+        concept.prior <- normalize_pathway_prior(llm.result$pathway.prior)
+        if (length(concept.prior)) {
+          clean.prior <- clean_signature_name(names(concept.prior))
+          mapped.prior <- stats::setNames(rep(NA_real_, length(features)),
+                                          names(features))
+          for (pw in names(features)) {
+            concepts <- unique(llm.concept.map$llm.concept[llm.concept.map$pathway == pw])
+            hit <- match(clean_signature_name(concepts), clean.prior)
+            vals <- as.numeric(concept.prior[hit[!is.na(hit)]])
+            vals <- vals[is.finite(vals)]
+            if (length(vals)) mapped.prior[[pw]] <- max(vals, na.rm = TRUE)
+          }
+          pathway.prior <- merge_pathway_prior(mapped.prior, pathway.prior)
+        }
         message("LLM curated concepts matched ", length(features),
                 " user-provided pathway(s) for modeling.")
       } else {
@@ -484,13 +505,13 @@ pathway_select <- function(outcome.type, outcome, features, data, models.indiv, 
              "or use llm.mode = 'prior' to score all supplied pathways.")
       }
     }
-    if (llm.mode %in% c("curate", "both") &&
-        llm.curate.action %in% c("add_signatures", "both") &&
+    if (llm.mode == "curate" &&
+        llm.curate.action == "add_signatures" &&
         length(llm.result$literature.features)) {
       literature.features <- c(literature.features %||% list(),
                                llm.result$literature.features)
     }
-    if (llm.mode %in% c("prior", "both") &&
+    if (llm.mode == "prior" &&
         length(llm.result$pathway.prior)) {
       pathway.prior <- merge_pathway_prior(llm.result$pathway.prior,
                                            pathway.prior)
