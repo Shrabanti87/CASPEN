@@ -124,6 +124,9 @@ caspen_model_info()
 - `gene_select()`: select genes within selected pathways.
 - `Train_perform_CV()`: estimate training performance by cross-validation.
 - `Test_perform()`: evaluate independent test-set performance.
+- `Gene_Train_perform_CV()`: estimate gene-level training performance without
+  pathway aggregation.
+- `Gene_Test_perform()`: evaluate gene-level independent test-set performance.
 - `llm_literature_signatures()`: curate/score literature priors using PubMed,
   PubTator3, OpenAI, or a custom local LLM such as Ollama.
 - `plot_pathway_selection()`: plot AUC/C-index by SP95.
@@ -609,6 +612,42 @@ test_res <- Test_perform(
 
 test_res$auc
 test_res$SP.95
+```
+
+Gene-level training/test performance:
+
+Use these functions when the model should be fit directly on selected genes or
+features instead of pathway-level blocks. Base learners are fit on the gene
+matrix; ensemble models are then fit on the base-learner prediction columns.
+If `models.indiv = NULL`, CASPEN uses all models supported by the selected
+outcome type.
+
+```r
+selected_genes <- unique(unlist(path_res$features))
+
+gene_train_res <- Gene_Train_perform_CV(
+  outcome.type = "binary",
+  outcome = y,
+  train_data = x,
+  genes = selected_genes,
+  iter = 10,
+  num.folds = 3
+)
+
+gene_train_res$auc
+gene_train_res$SP.95
+
+gene_test_res <- Gene_Test_perform(
+  outcome.type = "binary",
+  outcome = y,
+  train_data = x,
+  test_data = test_x,
+  test_outcome = test_y,
+  genes = selected_genes
+)
+
+gene_test_res$auc
+gene_test_res$SP.95
 ```
 
 Continuous training/test examples:
