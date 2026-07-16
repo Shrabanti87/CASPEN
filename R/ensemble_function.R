@@ -40,11 +40,16 @@
 #' skip literature gene sets that are redundant with already supplied
 #' pathways.
 #' @param llm.mode Character string controlling live LLM curation. One of
-#' `"none"`, `"curate"`, `"prior"`, or `"both"`. `"curate"` adds new
-#' disease/outcome-specific literature signatures without using LLM priors,
-#' `"prior"` scores existing pathway names without adding new signatures, and
-#' `"both"` adds new signatures and reports priors for both existing and new
-#' signatures. No LLM call is made when `"none"`.
+#' `"none"`, `"curate"`, `"prior"`, or `"both"`. `"curate"` asks the LLM for
+#' disease/outcome-specific biological concepts and, by default, maps those
+#' concepts to the user-provided pathway universe so only matched curated
+#' pathways are modeled. `"prior"` scores existing pathway names without adding
+#' new signatures, and `"both"` curates concepts and reports priors. No LLM call
+#' is made when `"none"`.
+#' @param llm.curate.action How curated LLM concepts are used. `"match_pathways"`
+#' maps concepts to the supplied pathway list and runs only matched pathways;
+#' `"add_signatures"` adds LLM-curated gene sets as new signatures; `"both"`
+#' does both.
 #' @param disease Disease context used for LLM curation, required when
 #' `llm.mode != "none"`.
 #' @param outcome.context Outcome context used for LLM curation, required when
@@ -387,6 +392,7 @@ pathway_select <- function(outcome.type, outcome, features, data, models.indiv, 
                            prior.clip = c(0, 1),
                            redundancy.thresh = NULL,
                            llm.mode = c("none", "curate", "prior", "both"),
+                           llm.curate.action = c("match_pathways", "add_signatures", "both"),
                            disease = NULL,
                            outcome.context = NULL,
                            llm.provider = c("openai", "custom"),
@@ -427,6 +433,7 @@ pathway_select <- function(outcome.type, outcome, features, data, models.indiv, 
   R2.mat <- RMSE.mat <- MAE.mat <- CONT.CINDEX.mat <- NULL
   prior.mode <- match.arg(prior.mode)
   llm.mode <- match.arg(llm.mode)
+  llm.curate.action <- match.arg(llm.curate.action)
   llm.provider <- match.arg(llm.provider)
   llm.prior.method <- match.arg(llm.prior.method)
   celltype.position <- match.arg(celltype.position)
@@ -439,6 +446,7 @@ pathway_select <- function(outcome.type, outcome, features, data, models.indiv, 
   }
 
   llm.result <- NULL
+  llm.concept.map <- NULL
   if (llm.mode != "none") {
     llm.result <- llm_literature_signatures(
       disease = disease,
@@ -463,6 +471,21 @@ pathway_select <- function(outcome.type, outcome, features, data, models.indiv, 
       temperature = llm.temperature
     )
     if (llm.mode %in% c("curate", "both") &&
+        llm.curate.action %in% c("match_pathways", "both")) {
+      matched <- caspen_match_curated_concepts(features, llm.result)
+      llm.concept.map <- matched$map
+      if (!is.null(llm.concept.map) && nrow(llm.concept.map)) {
+        features <- matched$features
+        message("LLM curated concepts matched ", length(features),
+                " user-provided pathway(s) for modeling.")
+      } else {
+        stop("No user-provided pathways matched the LLM-curated concepts. ",
+             "Use llm.curate.action = 'add_signatures' to model LLM gene sets directly, ",
+             "or use llm.mode = 'prior' to score all supplied pathways.")
+      }
+    }
+    if (llm.mode %in% c("curate", "both") &&
+        llm.curate.action %in% c("add_signatures", "both") &&
         length(llm.result$literature.features)) {
       literature.features <- c(literature.features %||% list(),
                                llm.result$literature.features)
@@ -818,6 +841,7 @@ pathway_select <- function(outcome.type, outcome, features, data, models.indiv, 
     ret$tuning.table <- do.call(rbind, tuning.results[keep])
   }
   if (!is.null(llm.result)) ret$llm <- llm.result
+  if (!is.null(llm.concept.map)) ret$llm.concept.map <- llm.concept.map
   if (type_out == "survival") {
     ret$C.index <- CINDEX.mat
     ret$C.index.CI.low <- CINDEX.CI.low.mat

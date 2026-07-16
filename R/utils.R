@@ -301,6 +301,77 @@ pool_pathway_features <- function(features, literature.features = NULL,
 
 #' @keywords internal
 #' @noRd
+caspen_concept_tokens <- function(x) {
+  x <- tolower(clean_signature_name(x))
+  x <- gsub("^(signature|signatures|pathway|pathways|geneset|genesets)_+", "", x)
+  x <- gsub("_+(signature|signatures|pathway|pathways|geneset|genesets)$", "", x)
+  toks <- unique(unlist(strsplit(x, "_+", perl = TRUE), use.names = FALSE))
+  toks <- toks[nchar(toks) >= 3]
+  stopwords <- c("the", "and", "with", "from", "cell", "cells", "pathway",
+                 "signature", "signaling", "activation", "response")
+  setdiff(toks, stopwords)
+}
+
+#' @keywords internal
+#' @noRd
+caspen_match_curated_concepts <- function(features, llm.result,
+                                          min.token.overlap = 1,
+                                          min.jaccard = 0.05) {
+  if (is.null(features) || !length(features) || is.null(llm.result)) {
+    return(list(features = features, map = data.frame()))
+  }
+  if (is.null(names(features))) names(features) <- paste0("Pathway_", seq_along(features))
+  raw <- llm.result$raw.signatures.all %||% llm.result$raw.signatures
+  if (is.null(raw) || !is.data.frame(raw) || !nrow(raw)) {
+    raw <- llm.result$evidence
+  }
+  if (is.null(raw) || !is.data.frame(raw) || !nrow(raw)) {
+    return(list(features = features, map = data.frame()))
+  }
+  concept.names <- unique(as.character(
+    raw$name %||% raw$signature.name %||% raw$llm.name %||% raw$pathway
+  ))
+  concept.names <- concept.names[nzchar(concept.names)]
+  if (!length(concept.names)) {
+    return(list(features = features, map = data.frame()))
+  }
+
+  feature.tokens <- lapply(names(features), caspen_concept_tokens)
+  concept.tokens <- lapply(concept.names, caspen_concept_tokens)
+  keep <- logical(length(features))
+  rows <- list()
+  for (i in seq_along(features)) {
+    ft <- feature.tokens[[i]]
+    for (j in seq_along(concept.names)) {
+      ct <- concept.tokens[[j]]
+      if (!length(ft) || !length(ct)) next
+      overlap <- length(intersect(ft, ct))
+      jacc <- overlap / length(union(ft, ct))
+      direct <- grepl(canonical_signature_name(concept.names[j]),
+                      canonical_signature_name(names(features)[i]),
+                      fixed = TRUE) ||
+        grepl(canonical_signature_name(names(features)[i]),
+              canonical_signature_name(concept.names[j]),
+              fixed = TRUE)
+      if (isTRUE(direct) || overlap >= min.token.overlap || jacc >= min.jaccard) {
+        keep[i] <- TRUE
+        rows[[length(rows) + 1L]] <- data.frame(
+          pathway = names(features)[i],
+          llm.concept = concept.names[j],
+          token.overlap = overlap,
+          jaccard = jacc,
+          direct.match = isTRUE(direct),
+          stringsAsFactors = FALSE
+        )
+      }
+    }
+  }
+  map <- if (length(rows)) do.call(rbind, rows) else data.frame()
+  list(features = features[keep], map = map)
+}
+
+#' @keywords internal
+#' @noRd
 normalize_celltype_token <- function(x) {
   tolower(gsub("[^[:alnum:]]+", "", x))
 }

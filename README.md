@@ -57,8 +57,8 @@ The recommended CASPEN workflow is:
 1. Provide curated pathways/gene sets, such as MSigDB signatures.
 2. Let the LLM curate disease/outcome-relevant **biological concepts** and/or
    score prior evidence.
-3. CASPEN maps those concepts back to the user-provided pathway list and uses
-   the curated pathway genes for modeling.
+3. CASPEN maps those concepts back to the user-provided pathway list and runs
+   only the matched curated pathways.
 
 For example:
 
@@ -70,6 +70,25 @@ Genes used for modeling: genes from the supplied MSigDB pathway
 
 This keeps CASPEN literature-aware while keeping gene membership curated,
 interpretable, and large enough for prediction.
+
+In `pathway_select()`, this behavior is controlled by:
+
+```r
+llm.mode = "curate"
+llm.curate.action = "match_pathways"
+```
+
+For example, if the user supplies 1000 MSigDB/user pathways and the LLM
+curates concepts that match 100 of them, CASPEN runs those 100 matched
+user-provided pathways. The mapping is returned in:
+
+```r
+res$llm.concept.map
+```
+
+Users who want to model raw LLM gene sets directly can instead set
+`llm.curate.action = "add_signatures"`, although this is less recommended
+because LLM gene lists can be small or incomplete.
 
 ## Installation
 
